@@ -7,6 +7,30 @@
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
+  <div class="auth-overlay" id="authOverlay" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <section class="auth-dialog">
+      <div>
+        <p class="eyebrow auth-eyebrow">Private Running Lab</p>
+        <h2 id="authTitle">账号登录</h2>
+        <p class="auth-copy">注册后会在腾讯云 COS 中使用你的用户名作为目录，跑步数据会加密保存到该目录下。</p>
+      </div>
+      <label>用户名
+        <input type="text" id="authUsername" autocomplete="username" placeholder="例如 fish">
+      </label>
+      <label>密码 / PIN
+        <input type="password" id="authPassword" autocomplete="current-password" placeholder="用于登录和加密数据">
+      </label>
+      <label>临时密钥接口
+        <input type="url" id="authCredentialUrl" placeholder="https://你的云函数地址/get-cos-credentials">
+      </label>
+      <div class="form-actions">
+        <button type="button" class="primary-button" id="loginBtn">登录</button>
+        <button type="button" class="secondary-button" id="registerBtn">注册</button>
+      </div>
+      <p class="helper-text" id="authMessage">Bucket 已内置：running-platform-1323797631，Region 已内置：ap-beijing。</p>
+    </section>
+  </div>
+
   <header class="app-header">
     <div>
       <p class="eyebrow">Apple Watch 跑步数据</p>
@@ -116,33 +140,21 @@
 
       <section class="panel" data-panel-id="syncPanel">
         <div class="panel-title">
-          <h2>Admin 同步</h2>
+          <h2>账号同步</h2>
           <span class="pill" id="syncState">离线缓存</span>
         </div>
-        <label>Admin PIN
-          <input type="password" id="adminPin" inputmode="numeric" autocomplete="current-password" placeholder="类似 Windows PIN">
-        </label>
-        <div class="form-grid">
-          <label>COS Bucket
-            <input type="text" id="cosBucket" placeholder="example-1250000000">
-          </label>
-          <label>Region
-            <input type="text" id="cosRegion" placeholder="ap-guangzhou">
-          </label>
+        <div class="sync-summary">
+          <span>当前账号</span>
+          <strong id="currentUser">未登录</strong>
+          <span>云端路径</span>
+          <code id="currentKey">--</code>
         </div>
-        <label>数据文件 Key
-          <input type="text" id="cosKey" placeholder="running-platform/encrypted-data.json">
-        </label>
-        <label>临时密钥接口
-          <input type="url" id="credentialUrl" placeholder="https://你的云函数地址/get-cos-credentials">
-        </label>
         <div class="form-actions">
-          <button type="button" class="primary-button" id="unlockBtn">解锁并同步</button>
-          <button type="button" class="secondary-button" id="saveSyncConfigBtn">保存配置</button>
           <button type="button" class="secondary-button" id="manualSyncBtn">立即同步</button>
-          <button type="button" class="ghost-button" id="lockBtn">锁定</button>
+          <button type="button" class="secondary-button" id="switchAccountBtn">切换账号</button>
+          <button type="button" class="ghost-button" id="logoutBtn">退出登录</button>
         </div>
-        <p class="helper-text" id="syncMessage">未解锁时只使用本地缓存。同步到 COS 的数据会用 PIN 加密；截图不会上传。</p>
+        <p class="helper-text" id="syncMessage">登录后自动同步到腾讯云 COS。截图不会上传，只保存结构化跑步数据。</p>
       </section>
     </section>
 

@@ -37,30 +37,35 @@ https://你的用户名.github.io/running-predictor/
 
 ## 数据说明
 
-当前版本采用“本地优先 + Admin PIN + 腾讯云 COS 加密同步”：
+当前版本采用“本地优先 + 账号弹窗 + 腾讯云 COS 加密同步”：
 
-- 未解锁时，数据保存在浏览器 `localStorage` 中。
-- 输入 Admin PIN 后，会把数据加密同步到腾讯云 COS 存储桶里的一个 JSON 文件。
+- 打开网站会先显示登录/注册对话框。
+- Bucket 和 Region 已内置在前端代码中：
+  - Bucket: `running-platform-1323797631`
+  - Region: `ap-beijing`
+- 注册用户名后，云端数据会保存到该用户名对应的 COS 路径：
+  - `users/<username>/encrypted-data.json`
+- 密码 / PIN 会用于解密和加密该账号的数据。
 - 同步失败时不会丢数据，下次手动同步或重新登录后会继续合并。
 - 截图只在当前页面临时预览，不写入本地缓存，也不上传云端。
 - 识别/核对后的结构化文本数据才会保存。
-- PIN 不会保存到浏览器配置中，只在当前页面会话内使用。
+- 密码 / PIN 不会保存到浏览器配置中，只在当前页面会话内使用。
 
 ## 腾讯云 COS 配置
 
-需要准备：
+存储桶已经固定为：
 
 ```text
-Bucket: example-1250000000
-Region: ap-guangzhou
-Key: running-platform/encrypted-data.json
+Bucket: running-platform-1323797631
+Region: ap-beijing
+Key: users/<username>/encrypted-data.json
 临时密钥接口: https://你的云函数地址/get-cos-credentials
 ```
 
 COS 里只保存一个加密 JSON 文件，例如：
 
 ```text
-running-platform/encrypted-data.json
+users/fish/encrypted-data.json
 ```
 
 文件内容不是明文跑步数据，而是类似：
@@ -81,10 +86,10 @@ running-platform/encrypted-data.json
 正确做法是：
 
 ```text
-网页输入 PIN
+网页输入用户名和密码
   -> 请求你的临时密钥接口
-  -> 接口校验 PIN 或 PIN 哈希
-  -> 返回只允许读写 encrypted-data.json 的 COS 临时密钥
+  -> 接口在 COS 中创建或校验账号文件
+  -> 返回只允许读写 users/<username>/encrypted-data.json 的 COS 临时密钥
   -> 前端用临时密钥读写 COS
 ```
 
@@ -106,15 +111,15 @@ credential-function/README.md
 
 - Bucket 不要开放公共写入。
 - CORS 允许你的网站域名访问 COS。
-- 临时密钥策略只允许读写一个对象 Key，例如 `running-platform/encrypted-data.json`。
-- PIN 校验应放在临时密钥接口里；前端 PIN 门禁只是使用体验，不是安全边界。
+- 临时密钥策略只允许读写一个对象 Key，例如 `users/fish/encrypted-data.json`。
+- 密码校验应放在临时密钥接口里；前端登录弹窗只是使用体验，不是安全边界。
 
 ## 推荐部署组合
 
 - GitHub：保存代码。
 - GitHub Pages 或腾讯云静态网站托管：发布网页。
 - 腾讯云 COS：保存加密后的私人跑步数据 JSON。
-- 腾讯云 SCF / CloudBase 云函数：校验 Admin PIN，并签发 COS 临时密钥。
+- 腾讯云 SCF / CloudBase 云函数：注册/校验账号，并签发 COS 临时密钥。
 - 未来 OCR：用云函数识别截图，识别后只保存文本数据。
 
 ## 需要的临时密钥返回格式

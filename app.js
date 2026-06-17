@@ -1,4 +1,5 @@
 const STORAGE_KEY = "run-platform-v1";
+const SESSION_KEY = "run-platform-session-v1";
 
 const state = loadState();
 const syncClient = window.RunCosSync ? new window.RunCosSync() : null;
@@ -24,6 +25,7 @@ const fields = {
 fields.date.value = today();
 el("weightDate").value = today();
 hydrateCloudForm();
+showAuthModal();
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
@@ -156,33 +158,45 @@ document.addEventListener("click", (event) => {
   render();
 });
 
-el("unlockBtn").addEventListener("click", async () => {
-  await runSyncAction(async () => {
-    await syncClient.unlock(readCloudForm());
-    const pulled = await syncClient.pull();
-    if (pulled) mergeCloudState(pulled);
-    await syncClient.push(state);
+el("loginBtn").addEventListener("click", async () => {
+  await runAuthAction(async () => {
+    const remote = await syncClient.login(readAuthForm());
+    replaceState(remote);
     saveState();
+    saveSession();
+    hideAuthModal();
     render();
-    setSyncUi("已解锁", "PIN 验证通过，本地数据已经和 COS 加密数据合并。");
+    setSyncUi("已同步", "登录成功，已加载这个账号的云端数据。");
   });
 });
 
-el("saveSyncConfigBtn").addEventListener("click", () => {
-  if (!syncClient) return;
-  const { pin, ...config } = readCloudForm();
-  syncClient.saveConfig(config);
-  setSyncUi("已保存", "COS 配置已保存在本机。PIN 不会保存。");
+el("registerBtn").addEventListener("click", async () => {
+  await runAuthAction(async () => {
+    await syncClient.register(readAuthForm());
+    await syncClient.push(state);
+    state.lastSyncedAt = Date.now();
+    saveState();
+    saveSession();
+    hideAuthModal();
+    render();
+    setSyncUi("已同步", "注册成功，已在 COS 中创建你的账号目录并上传当前数据。");
+  });
 });
 
 el("manualSyncBtn").addEventListener("click", async () => {
   await syncNow();
 });
 
-el("lockBtn").addEventListener("click", async () => {
+el("switchAccountBtn").addEventListener("click", () => {
+  showAuthModal();
+});
+
+el("logoutBtn").addEventListener("click", async () => {
   await runSyncAction(async () => {
     syncClient.lock();
-    setSyncUi("已锁定", "已清除本次会话中的 PIN。数据仍保留在本地缓存。");
+    sessionStorage.removeItem(SESSION_KEY);
+    showAuthModal();
+    setSyncUi("已退出", "已退出账号。当前页面数据仍保留在本地缓存。");
   });
 });
 
@@ -503,20 +517,17 @@ function escapeHtml(value) {
 
 function hydrateCloudForm() {
   if (!syncClient) return;
-  el("cosBucket").value = syncClient.config.bucket || "";
-  el("cosRegion").value = syncClient.config.region || "";
-  el("cosKey").value = syncClient.config.key || "running-platform/encrypted-data.json";
-  el("credentialUrl").value = syncClient.config.credentialUrl || "";
-  setSyncUi("离线缓存", "输入 Admin PIN 解锁后，可把加密数据同步到腾讯云 COS。");
+  el("authUsername").value = syncClient.config.username || "";
+  el("authCredentialUrl").value = syncClient.config.credentialUrl || "";
+  refreshAccountUi();
+  setSyncUi("未登录", "登录后会同步到腾讯云 COS。");
 }
 
-function readCloudForm() {
+function readAuthForm() {
   return {
-    pin: el("adminPin").value,
-    bucket: el("cosBucket").value.trim(),
-    region: el("cosRegion").value.trim(),
-    key: el("cosKey").value.trim() || "running-platform/encrypted-data.json",
-    credentialUrl: el("credentialUrl").value.trim()
+    username: el("authUsername").value,
+    password: el("authPassword").value,
+    credentialUrl: el("authCredentialUrl").value.trim()
   };
 }
 
@@ -535,6 +546,19 @@ async function runSyncAction(action) {
     await action();
   } catch (error) {
     setSyncUi("待同步", error.message || "云同步失败，数据已保存在本地，稍后可重试。");
+  }
+}
+
+async function runAuthAction(action) {
+  if (!syncClient) {
+    el("authMessage").textContent = "云同步模块未加载。";
+    return;
+  }
+  try {
+    el("authMessage").textContent = "正在连接腾讯云 COS...";
+    await action();
+  } catch (error) {
+    el("authMessage").textContent = error.message || "登录失败，请检查用户名、密码或临时密钥接口。";
   }
 }
 
@@ -567,6 +591,39 @@ function mergeCloudState(remote) {
     state.goalDistance = remote.goalDistance;
     state.settingsUpdatedAt = remote.settingsUpdatedAt || state.settingsUpdatedAt;
   }
+}
+
+function replaceState(nextState) {
+  const normalized = normalizeState(nextState);
+  state.runs = normalized.runs;
+  state.weights = normalized.weights;
+  state.deletedRunIds = normalized.deletedRunIds;
+  state.deletedWeightIds = normalized.deletedWeightIds;
+  state.goalDistance = normalized.goalDistance;
+  state.settingsUpdatedAt = normalized.settingsUpdatedAt;
+  state.lastSyncedAt = normalized.lastSyncedAt;
+}
+
+function showAuthModal() {
+  el("authOverlay").classList.add("active");
+  refreshAccountUi();
+}
+
+function hideAuthModal() {
+  el("authOverlay").classList.remove("active");
+  refreshAccountUi();
+}
+
+function refreshAccountUi() {
+  const username = syncClient?.username || syncClient?.config?.username || "";
+  const key = syncClient?.config?.key || (username ? `users/${username}/encrypted-data.json` : "--");
+  el("currentUser").textContent = username || "未登录";
+  el("currentKey").textContent = key;
+}
+
+function saveSession() {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ username: syncClient.username, key: syncClient.config.key }));
+  refreshAccountUi();
 }
 
 function mergeById(localItems, remoteItems) {

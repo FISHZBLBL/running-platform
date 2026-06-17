@@ -23,6 +23,47 @@ body {
   letter-spacing: 0;
 }
 
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: none;
+  place-items: center;
+  padding: 18px;
+  background: rgba(12, 24, 21, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.auth-overlay.active {
+  display: grid;
+}
+
+.auth-dialog {
+  width: min(430px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 24px;
+  border: 1px solid rgba(255,255,255,.5);
+  border-radius: 18px;
+  background: rgba(255,255,255,.96);
+  box-shadow: 0 28px 80px rgba(5, 20, 16, .28);
+}
+
+.auth-dialog h2 {
+  margin-bottom: 8px;
+  font-size: 1.65rem;
+}
+
+.auth-eyebrow {
+  color: var(--green);
+}
+
+.auth-copy {
+  margin-bottom: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 button,
 input,
 textarea,
@@ -305,6 +346,27 @@ button {
 .image-card span {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.sync-summary {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7faf9;
+}
+
+.sync-summary span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.sync-summary strong,
+.sync-summary code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .dashboard {
