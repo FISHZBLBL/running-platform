@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>跑步趋势预测平台</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Apple Watch 跑步数据</p>
+      <h1>跑步趋势预测平台</h1>
+      <p class="subtitle">记录配速、心率、功率、步频和环境数据，预测目标距离用时与半马达成时间。</p>
+    </div>
+    <div class="header-actions">
+      <button class="icon-button" id="exportBtn" title="导出数据" aria-label="导出数据">
+        <span>↓</span>
+      </button>
+      <label class="icon-button file-action" title="导入数据" aria-label="导入数据">
+        <span>↑</span>
+        <input type="file" id="importFile" accept="application/json">
+      </label>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <section class="control-panel">
+      <nav class="tabs" aria-label="功能切换">
+        <button class="tab active" data-panel="runPanel">跑步记录</button>
+        <button class="tab" data-panel="imagePanel">截图上传</button>
+        <button class="tab" data-panel="goalPanel">目标预测</button>
+        <button class="tab" data-panel="syncPanel">云同步</button>
+      </nav>
+
+      <form id="runForm" class="panel active" data-panel-id="runPanel">
+        <div class="panel-title">
+          <h2>新增跑步</h2>
+          <button type="button" class="ghost-button" id="sampleBtn">载入示例</button>
+        </div>
+        <div class="form-grid">
+          <label>日期
+            <input required type="date" id="date">
+          </label>
+          <label>距离 km
+            <input required type="number" id="distance" step="0.01" min="0.1" placeholder="5.00">
+          </label>
+          <label>用时
+            <input required type="text" id="duration" placeholder="00:28:30">
+          </label>
+          <label>平均配速
+            <input type="text" id="pace" placeholder="05:42">
+          </label>
+          <label>平均心率 bpm
+            <input type="number" id="heartRate" min="40" max="230" placeholder="158">
+          </label>
+          <label>平均功率 W
+            <input type="number" id="power" min="30" max="800" placeholder="220">
+          </label>
+          <label>平均步频 spm
+            <input type="number" id="cadence" min="80" max="240" placeholder="172">
+          </label>
+          <label>气温 C
+            <input type="number" id="temp" step="0.1" placeholder="24">
+          </label>
+          <label>湿度 %
+            <input type="number" id="humidity" min="0" max="100" placeholder="65">
+          </label>
+          <label>空气质量 AQI
+            <input type="number" id="aqi" min="0" placeholder="45">
+          </label>
+        </div>
+        <label>分段数据
+          <textarea id="splits" rows="4" placeholder="每行一段：1,05:30,155,230,176&#10;格式：距离km,配速,心率,功率,步频"></textarea>
+        </label>
+        <div class="form-actions">
+          <button type="submit" class="primary-button">保存记录</button>
+          <button type="button" class="secondary-button" id="clearBtn">清空全部</button>
+        </div>
+      </form>
+
+      <section class="panel" data-panel-id="imagePanel">
+        <div class="panel-title">
+          <h2>多张截图暂存</h2>
+          <span class="pill">人工核对录入</span>
+        </div>
+        <label class="drop-zone" for="imageUpload">
+          <input id="imageUpload" type="file" accept="image/*" multiple>
+          <strong>选择 iWatch / 健康 App 截图</strong>
+          <span>一次可上传多张。当前版本会生成缩略图，便于你边看边录入。</span>
+        </label>
+        <div id="imageList" class="image-list"></div>
+      </section>
+
+      <section class="panel" data-panel-id="goalPanel">
+        <div class="panel-title">
+          <h2>目标与体重</h2>
+          <span class="pill">独立趋势</span>
+        </div>
+        <div class="form-grid">
+          <label>预测目标距离 km
+            <input type="number" id="goalDistance" min="1" step="0.1" value="21.0975">
+          </label>
+          <label>当前体重 kg
+            <input type="number" id="weight" min="30" step="0.1" placeholder="选填">
+          </label>
+          <label>体重日期
+            <input type="date" id="weightDate">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="primary-button" id="saveGoalBtn">更新目标</button>
+          <button type="button" class="secondary-button" id="addWeightBtn">记录体重</button>
+        </div>
+      </section>
+
+      <section class="panel" data-panel-id="syncPanel">
+        <div class="panel-title">
+          <h2>Admin 同步</h2>
+          <span class="pill" id="syncState">离线缓存</span>
+        </div>
+        <label>Admin PIN
+          <input type="password" id="adminPin" inputmode="numeric" autocomplete="current-password" placeholder="类似 Windows PIN">
+        </label>
+        <div class="form-grid">
+          <label>COS Bucket
+            <input type="text" id="cosBucket" placeholder="example-1250000000">
+          </label>
+          <label>Region
+            <input type="text" id="cosRegion" placeholder="ap-guangzhou">
+          </label>
+        </div>
+        <label>数据文件 Key
+          <input type="text" id="cosKey" placeholder="running-platform/encrypted-data.json">
+        </label>
+        <label>临时密钥接口
+          <input type="url" id="credentialUrl" placeholder="https://你的云函数地址/get-cos-credentials">
+        </label>
+        <div class="form-actions">
+          <button type="button" class="primary-button" id="unlockBtn">解锁并同步</button>
+          <button type="button" class="secondary-button" id="saveSyncConfigBtn">保存配置</button>
+          <button type="button" class="secondary-button" id="manualSyncBtn">立即同步</button>
+          <button type="button" class="ghost-button" id="lockBtn">锁定</button>
+        </div>
+        <p class="helper-text" id="syncMessage">未解锁时只使用本地缓存。同步到 COS 的数据会用 PIN 加密；截图不会上传。</p>
+      </section>
+    </section>
+
+    <section class="dashboard">
+      <div class="metric-strip">
+        <article>
+          <span>训练记录</span>
+          <strong id="runCount">0</strong>
+        </article>
+        <article>
+          <span>最长距离</span>
+          <strong id="longestRun">--</strong>
+        </article>
+        <article>
+          <span>预测目标用时</span>
+          <strong id="predictedTime">--</strong>
+        </article>
+        <article>
+          <span>半马达成</span>
+          <strong id="halfReady">--</strong>
+        </article>
+      </div>
+
+      <section class="chart-section">
+        <div class="section-heading">
+          <div>
+            <h2>趋势图表</h2>
+            <p>配速、心率、功率、距离与训练负荷随时间变化。</p>
+          </div>
+          <select id="chartMode" aria-label="图表指标">
+            <option value="pace">配速 / 距离</option>
+            <option value="heart">心率 / 配速</option>
+            <option value="power">功率 / 效率</option>
+            <option value="load">训练负荷</option>
+          </select>
+        </div>
+        <div id="chart" class="chart"></div>
+      </section>
+
+      <section class="analysis-grid">
+        <article>
+          <h3>预测摘要</h3>
+          <div id="predictionText" class="rich-text"></div>
+        </article>
+        <article>
+          <h3>训练建议</h3>
+          <div id="trainingText" class="rich-text"></div>
+        </article>
+      </section>
+
+      <section class="records-section">
+        <div class="section-heading">
+          <div>
+            <h2>记录表</h2>
+            <p>可随时删除异常记录，模型会立即重算。</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>距离</th>
+                <th>用时</th>
+                <th>配速</th>
+                <th>心率</th>
+                <th>功率</th>
+                <th>步频</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="recordsBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <template id="emptyState">
+    <div class="empty-state">
+      <strong>还没有跑步记录</strong>
+      <span>先录入几次 1km、2km、3km 或日常跑，趋势图和预测会自动出现。</span>
+    </div>
+  </template>
+
+  <script src="./cos-sync.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
