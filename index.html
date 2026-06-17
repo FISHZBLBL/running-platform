@@ -20,14 +20,17 @@
       <label>密码 / PIN
         <input type="password" id="authPassword" autocomplete="current-password" placeholder="用于登录和加密数据">
       </label>
-      <label>临时密钥接口
-        <input type="url" id="authCredentialUrl" placeholder="https://你的云函数地址/get-cos-credentials">
+      <label>腾讯云 SecretId
+        <input type="text" id="authSecretId" autocomplete="off" placeholder="AKID...">
+      </label>
+      <label>腾讯云 SecretKey
+        <input type="password" id="authSecretKey" autocomplete="off" placeholder="仅用于当前浏览器直连测试">
       </label>
       <div class="form-actions">
         <button type="button" class="primary-button" id="loginBtn">登录</button>
         <button type="button" class="secondary-button" id="registerBtn">注册</button>
       </div>
-      <p class="helper-text" id="authMessage">Bucket 已内置：running-platform-1323797631，Region 已内置：ap-beijing。</p>
+      <p class="helper-text" id="authMessage">直连测试版：Bucket 已内置，密钥只保存在当前浏览器配置中，请勿把密钥写进 GitHub 代码。</p>
     </section>
   </div>
 

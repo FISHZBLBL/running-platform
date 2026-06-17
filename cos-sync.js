@@ -28,32 +28,34 @@
       localStorage.setItem(CONFIG_KEY, JSON.stringify(this.config));
     }
 
-    async register({ username, password, credentialUrl }) {
+    async register({ username, password, secretId, secretKey }) {
       this.authAction = "register";
-      await this.openSession({ username, password, credentialUrl });
+      await this.openSession({ username, password, secretId, secretKey });
       const remote = await this.pull();
       if (remote) throw new Error("这个用户名已经存在，请直接登录或换一个用户名");
       await this.push(emptyState());
       return null;
     }
 
-    async login({ username, password, credentialUrl }) {
+    async login({ username, password, secretId, secretKey }) {
       this.authAction = "login";
-      await this.openSession({ username, password, credentialUrl });
+      await this.openSession({ username, password, secretId, secretKey });
       const remote = await this.pull();
       if (!remote) throw new Error("未找到这个账号的数据，请先注册");
       return remote;
     }
 
-    async openSession({ username, password, credentialUrl }) {
+    async openSession({ username, password, secretId, secretKey }) {
       const cleanUsername = normalizeUsername(username);
       if (!cleanUsername) throw new Error("请输入 2-32 位用户名，只能包含字母、数字、下划线和短横线");
       if (!password || password.length < 4) throw new Error("密码 / PIN 至少需要 4 位");
+      if (!secretId || !secretKey) throw new Error("请填写腾讯云 SecretId 和 SecretKey");
       this.saveConfig({
         bucket: DEFAULT_BUCKET,
         region: DEFAULT_REGION,
         key: userKey(cleanUsername),
-        credentialUrl,
+        secretId,
+        secretKey,
         username: cleanUsername
       });
       this.pin = password;
@@ -70,32 +72,12 @@
     }
 
     async initCos() {
-      const { credentialUrl } = this.config;
-      if (!credentialUrl) throw new Error("请填写临时密钥接口，前端不能保存腾讯云永久密钥");
+      const { secretId, secretKey } = this.config;
+      if (!secretId || !secretKey) throw new Error("请填写腾讯云 SecretId 和 SecretKey");
       await this.loadSdk();
       this.cos = new COS({
-        getAuthorization: async (_options, callback) => {
-          const response = await fetch(credentialUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: this.authAction,
-              username: this.username,
-              password: this.pin,
-              scope: "running-platform",
-              key: this.config.key
-            })
-          });
-          if (!response.ok) throw new Error("获取 COS 临时密钥失败");
-          const data = await response.json();
-          callback({
-            TmpSecretId: data.TmpSecretId || data.credentials?.tmpSecretId,
-            TmpSecretKey: data.TmpSecretKey || data.credentials?.tmpSecretKey,
-            SecurityToken: data.SecurityToken || data.credentials?.sessionToken,
-            StartTime: data.StartTime || data.startTime,
-            ExpiredTime: data.ExpiredTime || data.expiredTime
-          });
-        }
+        SecretId: secretId,
+        SecretKey: secretKey
       });
     }
 

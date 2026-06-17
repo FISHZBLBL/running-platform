@@ -518,16 +518,18 @@ function escapeHtml(value) {
 function hydrateCloudForm() {
   if (!syncClient) return;
   el("authUsername").value = syncClient.config.username || "";
-  el("authCredentialUrl").value = syncClient.config.credentialUrl || "";
+  el("authSecretId").value = syncClient.config.secretId || "";
+  el("authSecretKey").value = syncClient.config.secretKey || "";
   refreshAccountUi();
-  setSyncUi("未登录", "登录后会同步到腾讯云 COS。");
+  setSyncUi("未登录", "登录后会直连腾讯云 COS。");
 }
 
 function readAuthForm() {
   return {
     username: el("authUsername").value,
     password: el("authPassword").value,
-    credentialUrl: el("authCredentialUrl").value.trim()
+    secretId: el("authSecretId").value.trim(),
+    secretKey: el("authSecretKey").value.trim()
   };
 }
 
@@ -555,10 +557,10 @@ async function runAuthAction(action) {
     return;
   }
   try {
-    el("authMessage").textContent = "正在连接腾讯云 COS...";
+    el("authMessage").textContent = "正在直连腾讯云 COS...";
     await action();
   } catch (error) {
-    el("authMessage").textContent = error.message || "登录失败，请检查用户名、密码或临时密钥接口。";
+    el("authMessage").textContent = error.message || "登录失败，请检查用户名、密码或腾讯云密钥。";
   }
 }
 
