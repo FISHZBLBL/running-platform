@@ -20,6 +20,15 @@ export function getEnv(name: string, fallback?: string): string | undefined {
   return process.env[name] ?? fallback;
 }
 
+export function isCloudFunctionRuntime(): boolean {
+  return Boolean(
+    getEnv("NETLIFY") ||
+      getEnv("AWS_LAMBDA_FUNCTION_NAME") ||
+      getEnv("LAMBDA_TASK_ROOT") ||
+      process.cwd().replace(/\\/g, "/") === "/var/task"
+  );
+}
+
 export function requiredEnv(name: string): string {
   const value = getEnv(name);
   if (!value) {
@@ -37,7 +46,7 @@ export function jwtSecret(): string {
   if (value) {
     return value;
   }
-  if (getEnv("CONTEXT") === "production") {
+  if (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime()) {
     throw new Error("JWT_SECRET must be configured in production.");
   }
   return "dev-only-running-platform-secret";

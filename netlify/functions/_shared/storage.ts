@@ -2,7 +2,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { getEnv } from "./env";
+import { getEnv, isCloudFunctionRuntime } from "./env";
 
 const require = createRequire(import.meta.url);
 
@@ -32,8 +32,8 @@ class CosStorage implements StorageAdapter {
   private region: string;
 
   constructor() {
-    this.bucket = getEnv("COS_BUCKET")!;
-    this.region = getEnv("COS_REGION")!;
+    this.bucket = getEnv("COS_BUCKET", "running-platform-1323797631")!;
+    this.region = getEnv("COS_REGION", "ap-beijing")!;
     const COS = require("cos-nodejs-sdk-v5") as new (options: Record<string, string | undefined>) => CosClient;
     this.client = new COS({
       SecretId: getEnv("COS_SECRET_ID"),
@@ -165,11 +165,11 @@ let adapter: StorageAdapter | null = null;
 
 export function storage(): StorageAdapter {
   if (!adapter) {
-    const hasCos = getEnv("COS_SECRET_ID") && getEnv("COS_SECRET_KEY") && getEnv("COS_BUCKET") && getEnv("COS_REGION");
-    if (!hasCos && getEnv("CONTEXT") === "production") {
-      throw new Error("COS environment variables must be configured in production.");
+    const hasCosSecrets = Boolean(getEnv("COS_SECRET_ID") && getEnv("COS_SECRET_KEY"));
+    if (!hasCosSecrets && (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime())) {
+      throw new Error("COS_SECRET_ID and COS_SECRET_KEY must be configured for Netlify Functions.");
     }
-    adapter = hasCos ? new CosStorage() : new LocalStorage();
+    adapter = hasCosSecrets ? new CosStorage() : new LocalStorage();
   }
   return adapter;
 }
