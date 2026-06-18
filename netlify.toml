@@ -5,6 +5,7 @@
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"
+  external_node_modules = ["cos-nodejs-sdk-v5"]
 
 [[redirects]]
   from = "/*"
