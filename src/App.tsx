@@ -452,10 +452,12 @@ function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | 
           <span>{primaryLabel}</span>
           <strong>{primaryValue}</strong>
         </div>
-        <div>
-          <span>按当前趋势完赛</span>
-          <strong>{prediction.predictedTargetFinishSec ? formatDuration(prediction.predictedTargetFinishSec) : "-"}</strong>
-        </div>
+        {mode === "distance-date" && (
+          <div>
+            <span>按当前趋势完赛</span>
+            <strong>{prediction.predictedTargetFinishSec ? formatDuration(prediction.predictedTargetFinishSec) : "-"}</strong>
+          </div>
+        )}
         <div>
           <span>历史最长距离</span>
           <strong>{prediction.longestDistanceKm.toFixed(1)} km</strong>
@@ -600,47 +602,59 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
           </button>
         </div>
       </div>
-      <form className="data-form" onSubmit={submit}>
-        <label>
+      <form className="data-form run-form" onSubmit={submit}>
+        <label className="wide">
           日期时间
           <input type="datetime-local" value={draft.dateTime} onChange={(event) => setField("dateTime", event.target.value)} />
         </label>
-        <label>
-          距离 km
-          <input value={draft.distanceKm} onChange={(event) => setField("distanceKm", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          总用时
-          <input value={draft.duration} onChange={(event) => setField("duration", event.target.value)} placeholder="45:30 或 1:35:20" />
-        </label>
-        <label>
-          平均配速
-          <input value={draft.avgPace} onChange={(event) => setField("avgPace", event.target.value)} placeholder="5:20" />
-        </label>
-        <label>
-          平均功率 W
-          <input value={draft.avgPowerW} onChange={(event) => setField("avgPowerW", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          平均步频 spm
-          <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          平均心率 bpm
-          <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          气温 C
-          <input value={draft.temperatureC} onChange={(event) => setField("temperatureC", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          湿度 %
-          <input value={draft.humidityPct} onChange={(event) => setField("humidityPct", event.target.value)} inputMode="decimal" />
-        </label>
-        <label>
-          AQI
-          <input value={draft.aqi} onChange={(event) => setField("aqi", event.target.value)} inputMode="decimal" />
-        </label>
+        <div className="form-row wide two-cols">
+          <label>
+            距离 km
+            <input value={draft.distanceKm} onChange={(event) => setField("distanceKm", event.target.value)} inputMode="decimal" />
+          </label>
+          <label>
+            总用时
+            <input value={draft.duration} onChange={(event) => setField("duration", event.target.value)} placeholder="45:30 或 1:35:20" />
+          </label>
+        </div>
+        <div className="form-section wide">
+          <p>跑步表现</p>
+          <div className="performance-grid">
+            <label>
+              平均配速
+              <input value={draft.avgPace} onChange={(event) => setField("avgPace", event.target.value)} placeholder="5:20" />
+            </label>
+            <label>
+              平均心率 bpm
+              <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="decimal" />
+            </label>
+            <label>
+              平均步频 spm
+              <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="decimal" />
+            </label>
+            <label>
+              平均功率 W
+              <input value={draft.avgPowerW} onChange={(event) => setField("avgPowerW", event.target.value)} inputMode="decimal" />
+            </label>
+          </div>
+        </div>
+        <div className="form-section weather-section wide">
+          <p>环境</p>
+          <div className="weather-grid">
+            <label>
+              气温 C
+              <input value={draft.temperatureC} onChange={(event) => setField("temperatureC", event.target.value)} inputMode="decimal" />
+            </label>
+            <label>
+              湿度 %
+              <input value={draft.humidityPct} onChange={(event) => setField("humidityPct", event.target.value)} inputMode="decimal" />
+            </label>
+            <label>
+              AQI
+              <input value={draft.aqi} onChange={(event) => setField("aqi", event.target.value)} inputMode="decimal" />
+            </label>
+          </div>
+        </div>
         <label className="wide">
           Apple Watch 截图
           <input type="file" accept="image/*" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
