@@ -440,7 +440,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           max: paceRange.max,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
-        { type: "value", name: "月跑量 km", nameGap: 30, gridIndex: 2 }
+        { type: "value", name: "月跑量 km", nameLocation: "middle", nameGap: 44, gridIndex: 2 }
       ],
       series: [
         { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
