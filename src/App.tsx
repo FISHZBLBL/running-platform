@@ -19,6 +19,13 @@ type SplitDraft = {
   cadenceSpm: string;
 };
 
+type SplitOcrResult = {
+  splits: SplitDraft[];
+  detectedCount: number;
+  fullSplitCount: number;
+  droppedIndexes: number[];
+};
+
 type RunDraft = {
   id: string;
   dateTime: string;
@@ -277,7 +284,8 @@ function formatPaceCandidate(minutesText: string, secondsText: string): string |
 
 function extractPaceValue(text: string, section: string): string | null {
   const pacePatterns = [
-    /(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/,
+    /(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:['"″”]|''|’’|…|\d|\s){0,5}(?:[\/／]?\s*(?:km|KM|公里))/,
+    /(\d{1,2})\s+(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]\s*(?:km|KM|公里))/,
     /(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?/
   ];
   for (const pattern of pacePatterns) {
@@ -288,11 +296,11 @@ function extractPaceValue(text: string, section: string): string | null {
   }
 
   const labeledMatch = text.match(
-    /(?:平均配速|配速).{0,180}?(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/
+    /(?:平均配速|配速).{0,180}?(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:['"″”]|''|’’|…|\d|\s){0,5}(?:[\/／]?\s*(?:km|KM|公里))/
   );
   if (labeledMatch) return formatPaceCandidate(labeledMatch[1], labeledMatch[2]);
 
-  const unitMatch = text.match(/(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/);
+  const unitMatch = text.match(/(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:['"″”]|''|’’|…|\d|\s){0,5}(?:[\/／]?\s*(?:km|KM|公里))/);
   return unitMatch ? formatPaceCandidate(unitMatch[1], unitMatch[2]) : null;
 }
 
@@ -303,6 +311,198 @@ function extractCadenceValue(text: string, section: string): string | null {
     if (value >= 120 && value <= 230) return String(value);
   }
   return metricInRange(section, 120, 230);
+}
+
+function normalizeSplitText(text: string): string {
+  return text
+    .replace(/[，,]/g, "")
+    .replace(/[：]/g, ":")
+    .replace(/[／]/g, "/")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeOcrLine(line: string): string {
+  return line
+    .replace(/[，,]/g, "")
+    .replace(/[：]/g, ":")
+    .replace(/[／]/g, "/")
+    .replace(/[′’‘＇´]/g, "'")
+    .replace(/[″”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function splitOcrLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map(normalizeOcrLine)
+    .filter(Boolean);
+}
+
+function splitLinesAfter(lines: string[], labels: string[]): string[] {
+  const index = lines.findIndex((line) => labels.some((label) => line.includes(label)));
+  return index >= 0 ? lines.slice(index + 1) : lines;
+}
+
+function numberInLine(line: string, min: number, max: number): string | null {
+  const values = [...line.matchAll(/\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+  const value = values.find((item) => item >= min && item <= max);
+  return value === undefined ? null : String(value);
+}
+
+function paceFromLine(line: string): string | null {
+  const direct = extractPaceValue(line, line);
+  if (direct) return direct;
+  const compact = line.match(/(?:^|\D)(\d{1,2})\s*(\d{2})\s*(?:"|''|’’|公里|km|KM)/);
+  return compact ? formatPaceCandidate(compact[1], compact[2]) : null;
+}
+
+function parseTimePaceHeartSplits(lines: string[]): SplitDraft[] {
+  const source = splitLinesAfter(lines, ["时间", "配速"]);
+  const splits: SplitDraft[] = [];
+  let pendingTime = "";
+  let pendingPace = "";
+
+  for (const line of source) {
+    const timeMatch = line.match(/\b(\d{1,2}:\d{2})\b/);
+    if (timeMatch && !pendingTime) {
+      pendingTime = timeMatch[1];
+      continue;
+    }
+
+    const pace = paceFromLine(line);
+    if (pace) {
+      pendingPace = pace;
+      continue;
+    }
+
+    const heartRate = line.includes("次") || /bpm|BPM/.test(line) ? numberInLine(line, 60, 220) : null;
+    if (heartRate && (pendingTime || pendingPace)) {
+      splits.push({
+        ...emptySplit,
+        distanceKm: "1",
+        pace: pendingPace || pendingTime,
+        heartRateBpm: heartRate
+      });
+      pendingTime = "";
+      pendingPace = "";
+    }
+  }
+
+  return splits;
+}
+
+function parseEffortSplits(lines: string[]): SplitDraft[] {
+  const source = splitLinesAfter(lines, ["心率", "功率", "步频"]);
+  const splits: SplitDraft[] = [];
+  let pendingHeartRate = "";
+  let pendingPower = "";
+
+  for (const line of source) {
+    const heartRate = line.includes("次") || /bpm|BPM/.test(line) ? numberInLine(line, 60, 220) : null;
+    if (heartRate && !pendingHeartRate) {
+      pendingHeartRate = heartRate;
+      continue;
+    }
+
+    const power = /瓦|W|w|FR|R\b|K\b/.test(line) ? numberInLine(line, 50, 600) : null;
+    if (power && pendingHeartRate && !pendingPower) {
+      pendingPower = power;
+      continue;
+    }
+
+    const cadence = /步|spm|SPM|%\s*\/\s*(?:9|%)/.test(line) ? numberInLine(line, 120, 230) : null;
+    if (cadence && pendingHeartRate) {
+      splits.push({
+        ...emptySplit,
+        distanceKm: "1",
+        heartRateBpm: pendingHeartRate,
+        powerW: pendingPower,
+        cadenceSpm: cadence
+      });
+      pendingHeartRate = "";
+      pendingPower = "";
+    }
+  }
+
+  return splits;
+}
+
+function upsertSplit(map: Map<number, SplitDraft>, index: number, patch: Partial<SplitDraft>) {
+  const current = map.get(index) ?? { ...emptySplit };
+  map.set(index, { ...current, ...patch });
+}
+
+function extractSplitRows(text: string): Map<number, SplitDraft> {
+  const normalized = normalizeSplitText(text);
+  const rowPattern = /(?:^|\s)(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*(?:次|bpm|BPM)))/g;
+  const rows = [...normalized.matchAll(rowPattern)].map((match) => ({ index: Number(match[1]), start: match.index ?? 0 }));
+  const splits = new Map<number, SplitDraft>();
+
+  rows.forEach((row, rowPosition) => {
+    const next = rows[rowPosition + 1]?.start ?? normalized.length;
+    const chunk = normalized.slice(row.start, next);
+    const timeMatch = chunk.match(/\b(\d{1,2}:\d{2})\b/);
+    const paceValue = extractPaceValue(chunk, chunk);
+    const heartRate = metricInRange(chunk.match(/\d{2,3}\s*次\s*\/\s*分/)?.[0] ?? "", 60, 220);
+    const power = metricInRange(chunk.match(/\d{2,4}\s*(?:瓦|W|w)/)?.[0] ?? "", 50, 600);
+    const cadence = extractCadenceValue(chunk, chunk);
+    const patch: Partial<SplitDraft> = { distanceKm: "1" };
+
+    if (paceValue) {
+      patch.pace = paceValue;
+    } else if (timeMatch) {
+      patch.pace = timeMatch[1];
+    }
+    if (heartRate) patch.heartRateBpm = heartRate;
+    if (power) patch.powerW = power;
+    if (cadence) patch.cadenceSpm = cadence;
+
+    upsertSplit(splits, row.index, patch);
+  });
+
+  return splits;
+}
+
+function mergeSplitLists(primary: SplitDraft[], secondary: SplitDraft[]): Map<number, SplitDraft> {
+  const splitMap = new Map<number, SplitDraft>();
+  const count = Math.max(primary.length, secondary.length);
+  for (let index = 0; index < count; index += 1) {
+    const first = primary[index] ?? emptySplit;
+    const second = secondary[index] ?? emptySplit;
+    const merged: SplitDraft = {
+      distanceKm: first.distanceKm || second.distanceKm || "1",
+      pace: first.pace || second.pace,
+      heartRateBpm: first.heartRateBpm || second.heartRateBpm,
+      powerW: first.powerW || second.powerW,
+      cadenceSpm: first.cadenceSpm || second.cadenceSpm
+    };
+    splitMap.set(index + 1, merged);
+  }
+  return splitMap;
+}
+
+function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrResult {
+  const fullSplitCount = Math.max(0, Math.floor(totalDistanceKm));
+  const lines = splitOcrLines(text);
+  const timePaceHeartSplits = parseTimePaceHeartSplits(lines);
+  const effortSplits = parseEffortSplits(lines);
+  const splitMap =
+    timePaceHeartSplits.length > 0 || effortSplits.length > 0 ? mergeSplitLists(timePaceHeartSplits, effortSplits) : extractSplitRows(text);
+  const detectedIndexes = [...splitMap.keys()].sort((a, b) => a - b);
+  const droppedIndexes = detectedIndexes.filter((index) => fullSplitCount > 0 && index > fullSplitCount);
+  const splits = detectedIndexes
+    .filter((index) => fullSplitCount === 0 || index <= fullSplitCount)
+    .map((index) => splitMap.get(index)!)
+    .filter((split) => split.pace || split.heartRateBpm || split.powerW || split.cadenceSpm);
+
+  return {
+    splits,
+    detectedCount: detectedIndexes.length,
+    fullSplitCount,
+    droppedIndexes
+  };
 }
 
 function extractRunDraftFromText(text: string): Partial<RunDraft> {
@@ -835,6 +1035,34 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
     }
   }
 
+  async function recognizeSplits() {
+    if (files.length === 0) {
+      setMessage("请先选择一张或多张单段截图。");
+      return;
+    }
+    const totalDistanceKm = Number(draft.distanceKm);
+    if (!Number.isFinite(totalDistanceKm) || totalDistanceKm <= 0) {
+      setMessage("请先填写本次跑步总距离，再识别单段数据。");
+      return;
+    }
+    setMessage(window.TextDetector ? "正在识别单段截图，请稍等。" : "正在使用兼容 OCR 识别单段，首次加载可能需要几十秒。");
+    try {
+      const text = await detectTextFromImages(files);
+      const result = extractSplitsFromText(text, totalDistanceKm);
+      setRecognizedText(text || "未识别到文本。");
+      if (result.splits.length === 0) {
+        setMessage("未识别到可用单段数据，请检查截图是否包含段号、配速、心率、功率或步频。");
+        return;
+      }
+      setDraft((current) => ({ ...current, splits: result.splits }));
+      const droppedText =
+        result.droppedIndexes.length > 0 ? `已按总距离丢弃第 ${result.droppedIndexes.join("、")} 段尾段。` : "没有发现需要丢弃的尾段。";
+      setMessage(`已识别 ${result.detectedCount} 段，保留 ${result.splits.length} 段完整公里。${droppedText}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "单段截图识别失败，请手动校对录入。");
+    }
+  }
+
   return (
     <section className="panel">
       <div className="panel-heading">
@@ -914,9 +1142,14 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
           <div className="wide screenshot-review">
             <div className="screenshot-toolbar">
               <strong>截图待确认</strong>
-              <button type="button" className="ghost-button" onClick={recognizeScreenshots}>
-                识别并预填
-              </button>
+              <div className="inline-actions">
+                <button type="button" className="ghost-button" onClick={recognizeScreenshots}>
+                  识别总览
+                </button>
+                <button type="button" className="ghost-button" onClick={recognizeSplits}>
+                  识别单段
+                </button>
+              </div>
             </div>
             <div className="screenshot-grid">
               {filePreviews.map((preview, index) => (

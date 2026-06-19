@@ -518,8 +518,13 @@ textarea {
 .screenshot-toolbar {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
+}
+
+.screenshot-toolbar .inline-actions {
+  justify-content: flex-start;
 }
 
 .screenshot-grid {
