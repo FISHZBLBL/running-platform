@@ -18,7 +18,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -105,7 +106,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   background: #ffffff;
   border: 1px solid #cfd8e5;
   border-radius: 10px;
@@ -117,9 +119,15 @@ select {
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   border-color: #1864ab;
   box-shadow: 0 0 0 3px rgba(24, 100, 171, 0.14);
+}
+
+textarea {
+  min-height: 96px;
+  resize: vertical;
 }
 
 .primary-button,
@@ -228,7 +236,7 @@ select:focus {
 }
 
 .chart {
-  height: 520px;
+  height: 640px;
   width: 100%;
 }
 
@@ -240,7 +248,7 @@ select:focus {
   color: #667085;
   display: flex;
   font-weight: 700;
-  height: 520px;
+  height: 640px;
   justify-content: center;
   text-align: center;
 }
@@ -260,6 +268,13 @@ select:focus {
 
 .panel {
   padding: 16px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .muted-panel {
@@ -375,6 +390,37 @@ select:focus {
   text-align: center;
 }
 
+.screenshot-review {
+  background: #f8fafc;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.screenshot-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.screenshot-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+}
+
+.screenshot-grid img {
+  aspect-ratio: 9 / 16;
+  background: #e5eaf2;
+  border: 1px solid #cfd8e5;
+  border-radius: 8px;
+  object-fit: cover;
+  width: 100%;
+}
+
 .record-list {
   display: grid;
   gap: 10px;
@@ -393,6 +439,19 @@ select:focus {
 .record-item div {
   display: grid;
   gap: 3px;
+}
+
+.record-actions {
+  align-items: end;
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.small-button {
+  font-size: 12px;
+  min-height: 32px;
+  padding: 6px 10px;
 }
 
 .record-item span,
@@ -453,7 +512,7 @@ select:focus {
 
   .chart,
   .empty-chart {
-    height: 430px;
+    height: 560px;
   }
 
   .target-input {

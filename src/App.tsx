@@ -27,7 +27,20 @@ type RunDraft = {
   humidityPct: string;
   aqi: string;
   splits: SplitDraft[];
+  screenshotKeys: string[];
 };
+
+type TextDetectionResult = {
+  rawValue?: string;
+};
+
+declare global {
+  interface Window {
+    TextDetector?: new () => {
+      detect(source: ImageBitmapSource): Promise<TextDetectionResult[]>;
+    };
+  }
+}
 
 const emptySplit: SplitDraft = {
   distanceKm: "1",
@@ -56,7 +69,34 @@ function newRunDraft(): RunDraft {
     temperatureC: "",
     humidityPct: "",
     aqi: "",
-    splits: []
+    splits: [],
+    screenshotKeys: []
+  };
+}
+
+function draftFromRun(run: RunningRecord): RunDraft {
+  const date = new Date(run.dateTime);
+  date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
+  return {
+    id: run.id,
+    dateTime: date.toISOString().slice(0, 16),
+    distanceKm: String(run.distanceKm),
+    duration: formatDuration(run.durationSec),
+    avgPace: formatPace(run.avgPaceSecPerKm),
+    avgPowerW: String(run.avgPowerW),
+    avgCadenceSpm: String(run.avgCadenceSpm),
+    avgHeartRateBpm: String(run.avgHeartRateBpm),
+    temperatureC: run.weather.temperatureC === null ? "" : String(run.weather.temperatureC),
+    humidityPct: run.weather.humidityPct === null ? "" : String(run.weather.humidityPct),
+    aqi: run.weather.aqi === null ? "" : String(run.weather.aqi),
+    splits: run.splits.map((split) => ({
+      distanceKm: String(split.distanceKm),
+      pace: formatPace(split.paceSecPerKm),
+      heartRateBpm: String(split.heartRateBpm),
+      powerW: String(split.powerW),
+      cadenceSpm: String(split.cadenceSpm)
+    })),
+    screenshotKeys: run.screenshotKeys
   };
 }
 
@@ -128,6 +168,49 @@ function trend(values: number[]): number[] {
   const slope = (n * sumXY - sumX * sumY) / denominator;
   const intercept = (sumY - slope * sumX) / n;
   return values.map((_value, index) => slope * index + intercept);
+}
+
+function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceKm: number }> {
+  const totals = new Map<string, number>();
+  for (const run of runs) {
+    const month = run.dateTime.slice(0, 7);
+    totals.set(month, (totals.get(month) ?? 0) + run.distanceKm);
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([month, distanceKm]) => ({ month, distanceKm }));
+}
+
+function extractRunDraftFromText(text: string): Partial<RunDraft> {
+  const normalized = text.replace(/\s+/g, " ");
+  const distanceMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:km|KM|公里)/);
+  const durationMatch = normalized.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
+  const paceMatch = normalized.match(/(\d{1,2})['′:](\d{2})(?:"|″)?\s*(?:\/?\s*(?:km|公里))?/);
+  const heartRateMatch = normalized.match(/(?:心率|bpm|BPM)[^\d]*(\d{2,3})/);
+  const cadenceMatch = normalized.match(/(?:步频|spm|SPM)[^\d]*(\d{2,3})/);
+  const powerMatch = normalized.match(/(?:功率|W|w)[^\d]*(\d{2,4})/);
+  const result: Partial<RunDraft> = {};
+  if (distanceMatch) result.distanceKm = distanceMatch[1];
+  if (durationMatch) result.duration = durationMatch[1];
+  if (paceMatch) result.avgPace = `${paceMatch[1]}:${paceMatch[2]}`;
+  if (heartRateMatch) result.avgHeartRateBpm = heartRateMatch[1];
+  if (cadenceMatch) result.avgCadenceSpm = cadenceMatch[1];
+  if (powerMatch) result.avgPowerW = powerMatch[1];
+  return result;
+}
+
+async function detectTextFromImages(files: File[]): Promise<string> {
+  if (!window.TextDetector) {
+    throw new Error("当前浏览器不支持内置截图文字识别，请根据截图预览手动校对录入。");
+  }
+  const detector = new window.TextDetector();
+  const texts: string[] = [];
+  for (const file of files) {
+    const bitmap = await createImageBitmap(file);
+    const results = await detector.detect(bitmap);
+    texts.push(...results.map((result) => result.rawValue ?? "").filter(Boolean));
+  }
+  return texts.join("\n");
 }
 
 function nearestWeight(run: RunningRecord, weights: WeightRecord[]): WeightRecord | null {
@@ -215,6 +298,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     const dates = sorted.map((run) => run.dateTime.slice(0, 10));
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
     const distances = sorted.map((run) => run.distanceKm);
+    const monthly = monthlyMileage(sorted);
     const scatter = sorted
       .map((run) => {
         const weight = nearestWeight(run, weights);
@@ -223,19 +307,21 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
       .filter(Boolean);
 
     chart.setOption({
-      color: ["#1864ab", "#2b8a3e", "#c92a2a", "#7048e8", "#f08c00"],
+      color: ["#1864ab", "#2b8a3e", "#c92a2a", "#7048e8", "#f08c00", "#0f766e"],
       tooltip: {
         trigger: "axis",
         valueFormatter: (value: unknown) => (typeof value === "number" ? value.toFixed(2) : String(value))
       },
       legend: { top: 8, left: 16 },
       grid: [
-        { top: 56, left: 58, right: 58, height: "48%" },
-        { bottom: 46, left: 58, right: 58, height: "24%" }
+        { top: 62, left: 58, right: 58, height: "36%" },
+        { top: "52%", left: 58, right: 58, height: "18%" },
+        { bottom: 44, left: 58, right: 58, height: "18%" }
       ],
       xAxis: [
         { type: "category", data: dates, boundaryGap: false, gridIndex: 0 },
-        { type: "value", name: "体重 kg", gridIndex: 1, splitLine: { lineStyle: { type: "dashed" } } }
+        { type: "value", name: "体重 kg", gridIndex: 1, splitLine: { lineStyle: { type: "dashed" } } },
+        { type: "category", data: monthly.map((item) => item.month), gridIndex: 2 }
       ],
       yAxis: [
         {
@@ -252,7 +338,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           inverse: true,
           gridIndex: 1,
           axisLabel: { formatter: (value: number) => formatPace(value) }
-        }
+        },
+        { type: "value", name: "月跑量 km", gridIndex: 2 }
       ],
       series: [
         { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
@@ -266,6 +353,23 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           yAxisIndex: 2,
           data: scatter,
           symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+        },
+        {
+          name: "月跑量",
+          type: "bar",
+          xAxisIndex: 2,
+          yAxisIndex: 3,
+          data: monthly.map((item) => Number(item.distanceKm.toFixed(1))),
+          barMaxWidth: 28
+        },
+        {
+          name: "月跑量趋势",
+          type: "line",
+          xAxisIndex: 2,
+          yAxisIndex: 3,
+          data: trend(monthly.map((item) => item.distanceKm)),
+          lineStyle: { type: "dashed" },
+          symbol: "none"
         }
       ]
     });
@@ -342,11 +446,25 @@ function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | 
   );
 }
 
-function RunForm({ onSaved }: { onSaved: () => void }) {
-  const [draft, setDraft] = useState<RunDraft>(newRunDraft());
+function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRecord | null; onCancelEdit: () => void; onSaved: () => void }) {
+  const [draft, setDraft] = useState<RunDraft>(() => (editingRun ? draftFromRun(editingRun) : newRunDraft()));
   const [files, setFiles] = useState<File[]>([]);
+  const [filePreviews, setFilePreviews] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [recognizedText, setRecognizedText] = useState("");
+
+  useEffect(() => {
+    setDraft(editingRun ? draftFromRun(editingRun) : newRunDraft());
+    setFiles([]);
+    setRecognizedText("");
+  }, [editingRun]);
+
+  useEffect(() => {
+    const previews = files.map((file) => URL.createObjectURL(file));
+    setFilePreviews(previews);
+    return () => previews.forEach((preview) => URL.revokeObjectURL(preview));
+  }, [files]);
 
   function setField<K extends keyof RunDraft>(key: K, value: RunDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -375,7 +493,7 @@ function RunForm({ onSaved }: { onSaved: () => void }) {
         powerW: parseNumber(split.powerW),
         cadenceSpm: parseNumber(split.cadenceSpm)
       }));
-      await api.createRun({
+      const payload: RunningRecord = {
         id: draft.id,
         dateTime: new Date(draft.dateTime).toISOString(),
         distanceKm,
@@ -390,18 +508,42 @@ function RunForm({ onSaved }: { onSaved: () => void }) {
           aqi: draft.aqi ? parseNumber(draft.aqi) : null
         },
         splits,
-        screenshotKeys: uploaded.keys,
-        createdAt: new Date().toISOString(),
+        screenshotKeys: [...draft.screenshotKeys, ...uploaded.keys],
+        createdAt: editingRun?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString()
-      });
+      };
+      if (editingRun) {
+        await api.updateRun(payload);
+      } else {
+        await api.createRun(payload);
+      }
       setDraft(newRunDraft());
       setFiles([]);
-      setMessage("跑步记录已保存。");
+      setRecognizedText("");
+      setMessage(editingRun ? "跑步记录已更新。" : "跑步记录已保存。");
       onSaved();
+      onCancelEdit();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function recognizeScreenshots() {
+    setMessage("");
+    if (files.length === 0) {
+      setMessage("请先选择一张或多张截图。");
+      return;
+    }
+    try {
+      const text = await detectTextFromImages(files);
+      const patch = extractRunDraftFromText(text);
+      setRecognizedText(text || "未识别到文本。");
+      setDraft((current) => ({ ...current, ...patch }));
+      setMessage("已根据截图尝试预填，请检查并确认后再保存。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "截图识别失败，请手动校对录入。");
     }
   }
 
@@ -410,11 +552,18 @@ function RunForm({ onSaved }: { onSaved: () => void }) {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Run Entry</p>
-          <h2>跑步记录</h2>
+          <h2>{editingRun ? "编辑跑步记录" : "跑步记录"}</h2>
         </div>
-        <button type="button" className="ghost-button" onClick={() => setField("splits", [...draft.splits, { ...emptySplit }])}>
-          + 分段
-        </button>
+        <div className="inline-actions">
+          {editingRun && (
+            <button type="button" className="ghost-button" onClick={onCancelEdit}>
+              取消编辑
+            </button>
+          )}
+          <button type="button" className="ghost-button" onClick={() => setField("splits", [...draft.splits, { ...emptySplit }])}>
+            + 分段
+          </button>
+        </div>
       </div>
       <form className="data-form" onSubmit={submit}>
         <label>
@@ -461,6 +610,22 @@ function RunForm({ onSaved }: { onSaved: () => void }) {
           Apple Watch 截图
           <input type="file" accept="image/*" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
         </label>
+        {filePreviews.length > 0 && (
+          <div className="wide screenshot-review">
+            <div className="screenshot-toolbar">
+              <strong>截图待确认</strong>
+              <button type="button" className="ghost-button" onClick={recognizeScreenshots}>
+                识别并预填
+              </button>
+            </div>
+            <div className="screenshot-grid">
+              {filePreviews.map((preview, index) => (
+                <img key={preview} src={preview} alt={`running screenshot ${index + 1}`} />
+              ))}
+            </div>
+            {recognizedText && <textarea readOnly value={recognizedText} aria-label="recognized text" />}
+          </div>
+        )}
         {draft.splits.length > 0 && (
           <div className="split-table wide">
             {draft.splits.map((split, index) => (
@@ -477,7 +642,7 @@ function RunForm({ onSaved }: { onSaved: () => void }) {
         )}
         {message && <p className="form-message wide">{message}</p>}
         <button className="primary-button wide" disabled={busy}>
-          {busy ? "保存中..." : "保存跑步记录"}
+          {busy ? "保存中..." : editingRun ? "确认更新记录" : "保存跑步记录"}
         </button>
       </form>
     </section>
@@ -539,6 +704,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     return date.toISOString().slice(0, 10);
   });
   const [loading, setLoading] = useState(true);
+  const [editingRun, setEditingRun] = useState<RunningRecord | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -651,7 +817,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       </section>
 
       <section className="workspace-grid">
-        <RunForm onSaved={refresh} />
+        <RunForm editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={refresh} />
         <div className="side-column">
           <WeightForm onSaved={refresh} />
           <section className="panel">
@@ -669,7 +835,12 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
                     <strong>{run.dateTime.slice(0, 10)}</strong>
                     <span>{run.distanceKm.toFixed(2)} km · {formatPace(run.avgPaceSecPerKm)} /km</span>
                   </div>
-                  <small>{run.screenshotKeys.length} 张截图</small>
+                  <div className="record-actions">
+                    <small>{run.screenshotKeys.length} 张截图</small>
+                    <button type="button" className="ghost-button small-button" onClick={() => setEditingRun(run)}>
+                      编辑
+                    </button>
+                  </div>
                 </div>
               ))}
               {!runs.length && <p className="muted-text">还没有跑步记录。</p>}

@@ -25,6 +25,8 @@ export const api = {
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
   listRuns: () => request<{ runs: RunningRecord[] }>("/api/runs"),
   createRun: (run: RunningRecord) => request<{ run: RunningRecord }>("/api/runs", { method: "POST", body: JSON.stringify(run) }),
+  updateRun: (run: RunningRecord) =>
+    request<{ run: RunningRecord }>(`/api/runs/${encodeURIComponent(run.id)}`, { method: "PUT", body: JSON.stringify(run) }),
   listWeights: () => request<{ weights: WeightRecord[] }>("/api/weights"),
   saveWeight: (weight: Pick<WeightRecord, "date" | "weightKg">) =>
     request<{ weight: WeightRecord }>("/api/weights", { method: "POST", body: JSON.stringify(weight) }),
