@@ -236,7 +236,7 @@ textarea {
 }
 
 .chart {
-  height: 640px;
+  height: 860px;
   width: 100%;
 }
 
@@ -248,7 +248,7 @@ textarea {
   color: #667085;
   display: flex;
   font-weight: 700;
-  height: 640px;
+  height: 860px;
   justify-content: center;
   text-align: center;
 }
@@ -479,11 +479,28 @@ textarea {
 
 .history-month-heading {
   align-items: center;
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid #edf1f7;
+  color: inherit;
+  cursor: pointer;
   display: flex;
+  font: inherit;
   gap: 12px;
   justify-content: space-between;
   padding-bottom: 10px;
+  text-align: left;
+  width: 100%;
+}
+
+.history-month-heading:focus-visible {
+  border-radius: 8px;
+  outline: 3px solid rgba(24, 100, 171, 0.18);
+}
+
+.history-month-title {
+  display: grid;
+  gap: 4px;
 }
 
 .history-month-heading strong {
@@ -491,9 +508,22 @@ textarea {
   font-size: 18px;
 }
 
-.history-month-heading span {
+.history-month-title span {
   color: #667085;
   font-weight: 700;
+}
+
+.history-month-toggle {
+  align-items: center;
+  border: 1px solid #cfd8e5;
+  border-radius: 999px;
+  color: #27364a;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 32px;
+  padding: 6px 12px;
+  white-space: nowrap;
 }
 
 .history-columns {
@@ -620,7 +650,7 @@ textarea {
 
   .chart,
   .empty-chart {
-    height: 560px;
+    height: 860px;
   }
 
   .target-input {

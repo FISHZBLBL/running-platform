@@ -340,32 +340,41 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
       },
       legend: { top: 8, left: 16 },
       grid: [
-        { top: 62, left: 58, right: 58, height: "36%" },
-        { top: "52%", left: 58, right: 58, height: "18%" },
-        { bottom: 44, left: 58, right: 58, height: "18%" }
+        { top: 72, left: 64, right: 64, height: 260, containLabel: true },
+        { top: 410, left: 64, right: 64, height: 160, containLabel: true },
+        { top: 660, left: 64, right: 64, height: 160, containLabel: true }
       ],
       xAxis: [
-        { type: "category", data: dates, boundaryGap: false, gridIndex: 0 },
-        { type: "value", name: "体重 kg", gridIndex: 1, splitLine: { lineStyle: { type: "dashed" } } },
-        { type: "category", data: monthly.map((item) => item.month), gridIndex: 2 }
+        { type: "category", data: dates, boundaryGap: false, gridIndex: 0, nameGap: 24 },
+        {
+          type: "value",
+          name: "体重 kg",
+          nameLocation: "middle",
+          nameGap: 32,
+          gridIndex: 1,
+          splitLine: { lineStyle: { type: "dashed" } }
+        },
+        { type: "category", data: monthly.map((item) => item.month), gridIndex: 2, nameGap: 24 }
       ],
       yAxis: [
         {
           type: "value",
           name: "配速 /km",
+          nameGap: 30,
           inverse: true,
           gridIndex: 0,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
-        { type: "value", name: "距离 km", gridIndex: 0 },
+        { type: "value", name: "距离 km", nameGap: 30, gridIndex: 0 },
         {
           type: "value",
           name: "配速 /km",
+          nameGap: 30,
           inverse: true,
           gridIndex: 1,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
-        { type: "value", name: "月跑量 km", gridIndex: 2 }
+        { type: "value", name: "月跑量 km", nameGap: 30, gridIndex: 2 }
       ],
       series: [
         { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
@@ -740,6 +749,20 @@ function HistoryManager({
   onEditWeight: (weight: WeightRecord) => void;
 }) {
   const months = groupHistoryByMonth(runs, weights);
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(() => new Set());
+
+  function toggleMonth(month: string) {
+    setExpandedMonths((current) => {
+      const next = new Set(current);
+      if (next.has(month)) {
+        next.delete(month);
+      } else {
+        next.add(month);
+      }
+      return next;
+    });
+  }
+
   return (
     <section className="panel history-panel">
       <div className="panel-heading">
@@ -749,54 +772,67 @@ function HistoryManager({
         </div>
       </div>
       <div className="history-list">
-        {months.map((month) => (
-          <section className="history-month" key={month.month}>
-            <div className="history-month-heading">
-              <strong>{month.month}</strong>
-              <span>
-                {month.runs.length} 次跑步 · {month.weights.length} 条体重
-              </span>
-            </div>
-            <div className="history-columns">
-              <div>
-                <h3>跑步</h3>
-                <div className="history-items">
-                  {month.runs.map((run) => (
-                    <div className="history-item" key={run.id}>
-                      <div>
-                        <strong>{run.dateTime.slice(0, 10)}</strong>
-                        <span>
-                          {run.distanceKm.toFixed(2)} km · {formatPace(run.avgPaceSecPerKm)} /km · {formatDuration(run.durationSec)}
-                        </span>
-                      </div>
-                      <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
-                        编辑
-                      </button>
+        {months.map((month) => {
+          const isExpanded = expandedMonths.has(month.month);
+          return (
+            <section className="history-month" key={month.month}>
+              <button
+                type="button"
+                className="history-month-heading"
+                aria-expanded={isExpanded}
+                onClick={() => toggleMonth(month.month)}
+              >
+                <span className="history-month-title">
+                  <strong>{month.month}</strong>
+                  <span>
+                    {month.runs.length} 次跑步 · {month.weights.length} 条体重
+                  </span>
+                </span>
+                <span className="history-month-toggle">{isExpanded ? "收起" : "展开"}</span>
+              </button>
+              {isExpanded && (
+                <div className="history-columns">
+                  <div>
+                    <h3>跑步</h3>
+                    <div className="history-items">
+                      {month.runs.map((run) => (
+                        <div className="history-item" key={run.id}>
+                          <div>
+                            <strong>{run.dateTime.slice(0, 10)}</strong>
+                            <span>
+                              {run.distanceKm.toFixed(2)} km · {formatPace(run.avgPaceSecPerKm)} /km · {formatDuration(run.durationSec)}
+                            </span>
+                          </div>
+                          <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
+                            编辑
+                          </button>
+                        </div>
+                      ))}
+                      {month.runs.length === 0 && <p className="muted-text">本月没有跑步记录。</p>}
                     </div>
-                  ))}
-                  {month.runs.length === 0 && <p className="muted-text">本月没有跑步记录。</p>}
-                </div>
-              </div>
-              <div>
-                <h3>体重</h3>
-                <div className="history-items">
-                  {month.weights.map((weight) => (
-                    <div className="history-item" key={weight.date}>
-                      <div>
-                        <strong>{weight.date}</strong>
-                        <span>{weight.weightKg.toFixed(1)} kg</span>
-                      </div>
-                      <button type="button" className="ghost-button small-button" onClick={() => onEditWeight(weight)}>
-                        编辑
-                      </button>
+                  </div>
+                  <div>
+                    <h3>体重</h3>
+                    <div className="history-items">
+                      {month.weights.map((weight) => (
+                        <div className="history-item" key={weight.date}>
+                          <div>
+                            <strong>{weight.date}</strong>
+                            <span>{weight.weightKg.toFixed(1)} kg</span>
+                          </div>
+                          <button type="button" className="ghost-button small-button" onClick={() => onEditWeight(weight)}>
+                            编辑
+                          </button>
+                        </div>
+                      ))}
+                      {month.weights.length === 0 && <p className="muted-text">本月没有体重记录。</p>}
                     </div>
-                  ))}
-                  {month.weights.length === 0 && <p className="muted-text">本月没有体重记录。</p>}
+                  </div>
                 </div>
-              </div>
-            </div>
-          </section>
-        ))}
+              )}
+            </section>
+          );
+        })}
         {months.length === 0 && <p className="muted-text">还没有历史记录。</p>}
       </div>
     </section>
