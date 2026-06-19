@@ -111,6 +111,10 @@ function formatDuration(seconds: number): string {
     : `${minutes}:${String(rest).padStart(2, "0")}`;
 }
 
+function isCompleteDecimalInput(value: string): boolean {
+  return /^\d+(\.\d+)?$/.test(value.trim());
+}
+
 function trend(values: number[]): number[] {
   if (values.length < 2) return values;
   const n = values.length;
@@ -496,6 +500,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [weights, setWeights] = useState<WeightRecord[]>([]);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [targetDistance, setTargetDistance] = useState(21.0975);
+  const [targetDistanceInput, setTargetDistanceInput] = useState("21.0975");
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
@@ -544,7 +549,18 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             </div>
             <label className="target-input">
               目标距离 km
-              <input value={targetDistance} onChange={(event) => setTargetDistance(parseNumber(event.target.value, 21.0975))} />
+              <input
+                inputMode="decimal"
+                value={targetDistanceInput}
+                onBlur={() => setTargetDistanceInput(String(targetDistance))}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setTargetDistanceInput(value);
+                  if (isCompleteDecimalInput(value)) {
+                    setTargetDistance(Number(value));
+                  }
+                }}
+              />
             </label>
           </div>
           {runs.length ? <ResearchChart runs={runs} weights={weights} /> : <div className="empty-chart">保存跑步记录后显示趋势图。</div>}
