@@ -161,29 +161,27 @@ function isCompleteDecimalInput(value: string): boolean {
   return /^\d+(\.\d+)?$/.test(value.trim());
 }
 
-function trend(values: number[]): number[] {
-  if (values.length < 2) return values;
-  const n = values.length;
-  const sumX = values.reduce((sum, _value, index) => sum + index, 0);
-  const sumY = values.reduce((sum, value) => sum + value, 0);
-  const sumXY = values.reduce((sum, value, index) => sum + index * value, 0);
-  const sumXX = values.reduce((sum, _value, index) => sum + index * index, 0);
-  const denominator = n * sumXX - sumX * sumX;
-  if (denominator === 0) return values;
-  const slope = (n * sumXY - sumX * sumY) / denominator;
-  const intercept = (sumY - slope * sumX) / n;
-  return values.map((_value, index) => slope * index + intercept);
+function movingAverage(values: number[], windowSize = 3): number[] {
+  return values.map((_value, index) => {
+    const start = Math.max(0, index - windowSize + 1);
+    const window = values.slice(start, index + 1);
+    return window.reduce((sum, value) => sum + value, 0) / window.length;
+  });
 }
 
-function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceKm: number }> {
-  const totals = new Map<string, number>();
+function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceKm: number; longestDistanceKm: number }> {
+  const totals = new Map<string, { distanceKm: number; longestDistanceKm: number }>();
   for (const run of runs) {
     const month = run.dateTime.slice(0, 7);
-    totals.set(month, (totals.get(month) ?? 0) + run.distanceKm);
+    const current = totals.get(month) ?? { distanceKm: 0, longestDistanceKm: 0 };
+    totals.set(month, {
+      distanceKm: current.distanceKm + run.distanceKm,
+      longestDistanceKm: Math.max(current.longestDistanceKm, run.distanceKm)
+    });
   }
   return [...totals.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([month, distanceKm]) => ({ month, distanceKm }));
+    .map(([month, value]) => ({ month, ...value }));
 }
 
 function groupHistoryByMonth(runs: RunningRecord[], weights: WeightRecord[]): HistoryMonth[] {
@@ -356,9 +354,13 @@ function chartTooltipFormatter(params: unknown) {
     let formatted = "";
     if (name === "体重-配速" && Array.isArray(value)) {
       formatted = `${Number(value[0]).toFixed(1)} kg · ${formatPace(Number(value[1]))} /km · ${Number(value[2]).toFixed(1)} km`;
-    } else if (name.includes("配速")) {
+    } else if (name === "体重-心率" && Array.isArray(value)) {
+      formatted = `${Number(value[0]).toFixed(1)} kg · ${Number(value[1]).toFixed(0)} bpm · ${Number(value[2]).toFixed(1)} km`;
+    } else if (name.includes("配速") || name.includes("移动平均")) {
       formatted = `${formatPace(Number(value))} /km`;
-    } else if (name.includes("距离") || name.includes("月跑量")) {
+    } else if (name.includes("心率")) {
+      formatted = `${Number(value).toFixed(0)} bpm`;
+    } else if (name.includes("距离") || name.includes("月跑量") || name.includes("最长单次")) {
       formatted = `${Number(value).toFixed(2)} km`;
     } else {
       formatted = String(value ?? "");
@@ -377,31 +379,47 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
     const dates = sorted.map((run) => run.dateTime.slice(0, 10));
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
+    const paceAverage = movingAverage(paces);
     const distances = sorted.map((run) => run.distanceKm);
+    const heartRates = sorted.map((run) => run.avgHeartRateBpm);
     const monthly = monthlyMileage(sorted);
     const paceRange = paceAxis(paces);
     const weightRange = valueAxis(weights.map((weight) => weight.weightKg), { min: 65, max: 105 }, 2, 12);
-    const scatter = sorted
+    const distanceRange = valueAxis(distances, { min: 0, max: 15 }, 2, 6);
+    const heartRateRange = valueAxis(heartRates, { min: 120, max: 180 }, 5, 20);
+    const monthlyDistanceRange = valueAxis(
+      [...monthly.map((item) => item.distanceKm), ...monthly.map((item) => item.longestDistanceKm)],
+      { min: 0, max: 80 },
+      10,
+      30
+    );
+    const weightPaceScatter = sorted
       .map((run) => {
         const weight = nearestWeight(run, weights);
         return weight ? [weight.weightKg, run.avgPaceSecPerKm, run.distanceKm] : null;
       })
       .filter(Boolean);
+    const weightHeartRateScatter = sorted
+      .map((run) => {
+        const weight = nearestWeight(run, weights);
+        return weight ? [weight.weightKg, run.avgHeartRateBpm, run.distanceKm] : null;
+      })
+      .filter(Boolean);
 
     chart.setOption({
-      color: ["#1864ab", "#2b8a3e", "#c92a2a", "#7048e8", "#f08c00", "#0f766e"],
+      color: ["#1864ab", "#2b8a3e", "#c92a2a", "#f08c00", "#0f766e", "#7048e8"],
       tooltip: {
         trigger: "axis",
         formatter: chartTooltipFormatter
       },
       legend: [
-        { top: 8, left: 16, data: ["实际配速", "配速拟合", "实际距离", "距离拟合"] },
-        { top: 352, left: 16, data: ["体重-配速"] },
-        { top: 602, left: 16, data: ["月跑量", "月跑量趋势"] }
+        { top: 8, left: 16, data: ["实际配速", "3次移动平均", "单次距离", "平均心率"] },
+        { top: 352, left: 16, data: ["体重-配速", "体重-心率"] },
+        { top: 602, left: 16, data: ["月跑量", "最长单次距离"] }
       ],
       grid: [
-        { top: 72, left: 64, right: 64, height: 250, containLabel: true },
-        { top: 410, left: 64, right: 64, height: 160, containLabel: true },
+        { top: 72, left: 64, right: 112, height: 250, containLabel: true },
+        { top: 410, left: 64, right: 80, height: 160, containLabel: true },
         { top: 660, left: 64, right: 64, height: 160, containLabel: true }
       ],
       xAxis: [
@@ -429,7 +447,25 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           max: paceRange.max,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
-        { type: "value", name: "距离 km", nameGap: 30, gridIndex: 0 },
+        {
+          type: "value",
+          name: "距离 km",
+          nameGap: 30,
+          gridIndex: 0,
+          position: "right",
+          min: distanceRange.min,
+          max: distanceRange.max
+        },
+        {
+          type: "value",
+          name: "心率 bpm",
+          nameGap: 32,
+          gridIndex: 0,
+          position: "right",
+          offset: 52,
+          min: heartRateRange.min,
+          max: heartRateRange.max
+        },
         {
           type: "value",
           name: "配速 /km",
@@ -440,37 +476,62 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           max: paceRange.max,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
-        { type: "value", name: "月跑量 km", nameLocation: "middle", nameGap: 44, gridIndex: 2 }
+        {
+          type: "value",
+          name: "心率 bpm",
+          nameGap: 34,
+          gridIndex: 1,
+          position: "right",
+          min: heartRateRange.min,
+          max: heartRateRange.max
+        },
+        {
+          type: "value",
+          name: "跑量 km",
+          nameLocation: "middle",
+          nameGap: 44,
+          gridIndex: 2,
+          min: monthlyDistanceRange.min,
+          max: monthlyDistanceRange.max
+        }
       ],
       series: [
         { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
-        { name: "配速拟合", type: "line", data: trend(paces), smooth: true, lineStyle: { type: "dashed", width: 2 }, symbol: "none" },
-        { name: "实际距离", type: "bar", yAxisIndex: 1, data: distances, barMaxWidth: 20, opacity: 0.45 },
-        { name: "距离拟合", type: "line", yAxisIndex: 1, data: trend(distances), lineStyle: { type: "dashed" }, symbol: "none" },
+        { name: "3次移动平均", type: "line", data: paceAverage, smooth: true, lineStyle: { type: "dashed", width: 2 }, symbol: "none" },
+        { name: "单次距离", type: "bar", yAxisIndex: 1, data: distances, barMaxWidth: 20, opacity: 0.42 },
+        { name: "平均心率", type: "line", yAxisIndex: 2, data: heartRates, smooth: true, symbolSize: 7 },
         {
           name: "体重-配速",
           type: "scatter",
           xAxisIndex: 1,
-          yAxisIndex: 2,
-          data: scatter,
+          yAxisIndex: 3,
+          data: weightPaceScatter,
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+        },
+        {
+          name: "体重-心率",
+          type: "scatter",
+          xAxisIndex: 1,
+          yAxisIndex: 4,
+          data: weightHeartRateScatter,
           symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
         },
         {
           name: "月跑量",
           type: "bar",
           xAxisIndex: 2,
-          yAxisIndex: 3,
+          yAxisIndex: 5,
           data: monthly.map((item) => Number(item.distanceKm.toFixed(1))),
           barMaxWidth: 28
         },
         {
-          name: "月跑量趋势",
+          name: "最长单次距离",
           type: "line",
           xAxisIndex: 2,
-          yAxisIndex: 3,
-          data: trend(monthly.map((item) => item.distanceKm)),
-          lineStyle: { type: "dashed" },
-          symbol: "none"
+          yAxisIndex: 5,
+          data: monthly.map((item) => Number(item.longestDistanceKm.toFixed(1))),
+          smooth: true,
+          symbolSize: 8
         }
       ]
     });
