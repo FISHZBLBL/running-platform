@@ -51,6 +51,17 @@ describe("buildPrediction", () => {
     expect(prediction.predictedDistanceDate).toBe("2026-01-08");
   });
 
+  it("uses conservative long-run progression for near-future distance goals", () => {
+    const runs = [
+      run({ dateTime: "2026-06-01T00:00:00.000Z", distanceKm: 5.01, avgPaceSecPerKm: 455 }),
+      run({ dateTime: "2026-06-08T00:00:00.000Z", distanceKm: 13.14, avgPaceSecPerKm: 430 }),
+      run({ dateTime: "2026-06-17T00:00:00.000Z", distanceKm: 5.01, avgPaceSecPerKm: 455 })
+    ];
+    const prediction = buildPrediction(runs, [], 15);
+    expect(prediction.distanceProjectionBasis).toBe("long-run-progression");
+    expect(prediction.predictedDistanceDate).toBe("2026-06-22");
+  });
+
   it("supports finish-time and target-date goal modes", () => {
     const runs = [
       run({ dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 390 }),

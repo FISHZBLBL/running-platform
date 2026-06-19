@@ -49,6 +49,26 @@ function dateFromDay(startMs: number, day: number): string {
   return new Date(startMs + day * 86_400_000).toISOString().slice(0, 10);
 }
 
+function addDays(dateTime: string, days: number): string {
+  return new Date(new Date(dateTime).getTime() + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+function progressiveDistanceDate(sortedRuns: RunningRecord[], targetDistanceKm: number): string | null {
+  const longestRun = sortedRuns.reduce<RunningRecord | null>((best, run) => (!best || run.distanceKm > best.distanceKm ? run : best), null);
+  if (!longestRun || targetDistanceKm <= longestRun.distanceKm) {
+    return longestRun?.dateTime.slice(0, 10) ?? null;
+  }
+
+  const distanceGapRatio = targetDistanceKm / longestRun.distanceKm;
+  if (distanceGapRatio > 2.25) {
+    return null;
+  }
+
+  const weeklyIncrease = distanceGapRatio <= 1.2 ? 1.08 : 1.06;
+  const weeks = Math.max(1, Math.ceil(Math.log(distanceGapRatio) / Math.log(weeklyIncrease)));
+  return addDays(longestRun.dateTime, weeks * 7);
+}
+
 function nearestWeight(runDate: string, weights: WeightRecord[]): WeightRecord | null {
   const runMs = new Date(runDate).getTime();
   let best: { record: WeightRecord; delta: number } | null = null;
@@ -89,6 +109,7 @@ export function buildPrediction(
       predictedDistanceDate: achievedTargetDate,
       predictedGoalFinishDate: null,
       predictedFinishSecAtTargetDate: null,
+      distanceProjectionBasis: achievedTargetDate ? "achieved" : "insufficient",
       warnings: achievedTargetDate ? [`已经在 ${achievedTargetDate} 完成过 ${targetDistanceKm.toFixed(2)} km。`] : [],
       recommendations: ["至少记录 3 次跑步后再生成趋势预测。"]
     };
@@ -107,11 +128,22 @@ export function buildPrediction(
   const predictedPace = paceTrend ? Math.max(1, paceTrend.slope * latestRunDay + paceTrend.intercept) : sortedRuns.at(-1)!.avgPaceSecPerKm;
   const predictedTargetFinishSec = predictedPace * targetDistanceKm;
 
+  let distanceProjectionBasis: PredictionResult["distanceProjectionBasis"] = achievedTargetDate ? "achieved" : "insufficient";
   let predictedDistanceDate: string | null = achievedTargetDate;
   if (!achievedTargetDate && distanceTrend && distanceTrend.slope > 0) {
     const dayToTarget = (targetDistanceKm - distanceTrend.intercept) / distanceTrend.slope;
     if (Number.isFinite(dayToTarget) && dayToTarget >= latestRunDay) {
       predictedDistanceDate = dateFromDay(startMs, dayToTarget);
+      distanceProjectionBasis = "trend";
+    }
+  }
+  if (!achievedTargetDate) {
+    const progressiveDate = progressiveDistanceDate(sortedRuns, targetDistanceKm);
+    if (progressiveDate) {
+      distanceProjectionBasis = "long-run-progression";
+      if (!predictedDistanceDate || new Date(progressiveDate).getTime() < new Date(predictedDistanceDate).getTime()) {
+        predictedDistanceDate = progressiveDate;
+      }
     }
   }
 
@@ -131,9 +163,9 @@ export function buildPrediction(
     }
 
     let distanceDay: number | null = achievedTargetDate ? latestRunDay : null;
-    if (!achievedTargetDate && distanceTrend && distanceTrend.slope > 0) {
-      const day = (targetDistanceKm - distanceTrend.intercept) / distanceTrend.slope;
-      if (Number.isFinite(day) && day >= latestRunDay) {
+    if (!achievedTargetDate && predictedDistanceDate) {
+      const day = dayIndex(`${predictedDistanceDate}T00:00:00.000Z`, startMs);
+      if (day >= latestRunDay) {
         distanceDay = day;
       }
     }
@@ -182,6 +214,8 @@ export function buildPrediction(
     warnings.push(`已经在 ${achievedTargetDate} 完成过 ${targetDistanceKm.toFixed(2)} km，距离目标不需要再预测到未来。`);
   } else if (!predictedDistanceDate) {
     warnings.push("当前单次距离趋势不足以推算达成日期，建议增加更多长距离记录后再判断。");
+  } else if (distanceProjectionBasis === "long-run-progression") {
+    warnings.push("距离日期按历史最长距离和保守长跑递增估算，不代表比赛日能力或医疗建议。");
   }
   if (targetDate && targetDate < latestRunDate) {
     warnings.push("目标日期早于最近一次跑步记录，指定日期预测只作历史趋势参考。");
@@ -207,6 +241,7 @@ export function buildPrediction(
     predictedDistanceDate,
     predictedGoalFinishDate,
     predictedFinishSecAtTargetDate,
+    distanceProjectionBasis,
     warnings,
     recommendations
   };

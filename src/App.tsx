@@ -5,6 +5,11 @@ import type { PredictionResult, PublicUser, RunningRecord, RunSplit, WeightRecor
 
 type AuthMode = "login" | "register";
 type PredictionMode = "distance-date" | "finish-date" | "date-finish";
+type HistoryMonth = {
+  month: string;
+  runs: RunningRecord[];
+  weights: WeightRecord[];
+};
 
 type SplitDraft = {
   distanceKm: string;
@@ -179,6 +184,27 @@ function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceK
   return [...totals.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([month, distanceKm]) => ({ month, distanceKm }));
+}
+
+function groupHistoryByMonth(runs: RunningRecord[], weights: WeightRecord[]): HistoryMonth[] {
+  const grouped = new Map<string, HistoryMonth>();
+  for (const run of runs) {
+    const month = run.dateTime.slice(0, 7);
+    if (!grouped.has(month)) grouped.set(month, { month, runs: [], weights: [] });
+    grouped.get(month)!.runs.push(run);
+  }
+  for (const weight of weights) {
+    const month = weight.date.slice(0, 7);
+    if (!grouped.has(month)) grouped.set(month, { month, runs: [], weights: [] });
+    grouped.get(month)!.weights.push(weight);
+  }
+  return [...grouped.values()]
+    .map((entry) => ({
+      ...entry,
+      runs: entry.runs.sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime()),
+      weights: entry.weights.sort((a, b) => b.date.localeCompare(a.date))
+    }))
+    .sort((a, b) => b.month.localeCompare(a.month));
 }
 
 function extractRunDraftFromText(text: string): Partial<RunDraft> {
@@ -649,18 +675,25 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
   );
 }
 
-function WeightForm({ onSaved }: { onSaved: () => void }) {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [weightKg, setWeightKg] = useState("");
+function WeightForm({ editingWeight, onCancelEdit, onSaved }: { editingWeight: WeightRecord | null; onCancelEdit: () => void; onSaved: () => void }) {
+  const [date, setDate] = useState(editingWeight?.date ?? new Date().toISOString().slice(0, 10));
+  const [weightKg, setWeightKg] = useState(editingWeight ? String(editingWeight.weightKg) : "");
   const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setDate(editingWeight?.date ?? new Date().toISOString().slice(0, 10));
+    setWeightKg(editingWeight ? String(editingWeight.weightKg) : "");
+    setMessage("");
+  }, [editingWeight]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     try {
       await api.saveWeight({ date, weightKg: parseNumber(weightKg) });
       setWeightKg("");
-      setMessage("体重记录已保存。");
+      setMessage(editingWeight ? "体重记录已更新。" : "体重记录已保存。");
       onSaved();
+      onCancelEdit();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败。");
     }
@@ -671,8 +704,13 @@ function WeightForm({ onSaved }: { onSaved: () => void }) {
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Weight Entry</p>
-          <h2>体重记录</h2>
+          <h2>{editingWeight ? "编辑体重记录" : "体重记录"}</h2>
         </div>
+        {editingWeight && (
+          <button type="button" className="ghost-button" onClick={onCancelEdit}>
+            取消编辑
+          </button>
+        )}
       </div>
       <form className="data-form compact" onSubmit={submit}>
         <label>
@@ -683,9 +721,84 @@ function WeightForm({ onSaved }: { onSaved: () => void }) {
           体重 kg
           <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" />
         </label>
-        <button className="primary-button">保存体重</button>
+        <button className="primary-button">{editingWeight ? "确认更新体重" : "保存体重"}</button>
         {message && <p className="form-message wide">{message}</p>}
       </form>
+    </section>
+  );
+}
+
+function HistoryManager({
+  runs,
+  weights,
+  onEditRun,
+  onEditWeight
+}: {
+  runs: RunningRecord[];
+  weights: WeightRecord[];
+  onEditRun: (run: RunningRecord) => void;
+  onEditWeight: (weight: WeightRecord) => void;
+}) {
+  const months = groupHistoryByMonth(runs, weights);
+  return (
+    <section className="panel history-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">History</p>
+          <h2>历史记录管理</h2>
+        </div>
+      </div>
+      <div className="history-list">
+        {months.map((month) => (
+          <section className="history-month" key={month.month}>
+            <div className="history-month-heading">
+              <strong>{month.month}</strong>
+              <span>
+                {month.runs.length} 次跑步 · {month.weights.length} 条体重
+              </span>
+            </div>
+            <div className="history-columns">
+              <div>
+                <h3>跑步</h3>
+                <div className="history-items">
+                  {month.runs.map((run) => (
+                    <div className="history-item" key={run.id}>
+                      <div>
+                        <strong>{run.dateTime.slice(0, 10)}</strong>
+                        <span>
+                          {run.distanceKm.toFixed(2)} km · {formatPace(run.avgPaceSecPerKm)} /km · {formatDuration(run.durationSec)}
+                        </span>
+                      </div>
+                      <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
+                        编辑
+                      </button>
+                    </div>
+                  ))}
+                  {month.runs.length === 0 && <p className="muted-text">本月没有跑步记录。</p>}
+                </div>
+              </div>
+              <div>
+                <h3>体重</h3>
+                <div className="history-items">
+                  {month.weights.map((weight) => (
+                    <div className="history-item" key={weight.date}>
+                      <div>
+                        <strong>{weight.date}</strong>
+                        <span>{weight.weightKg.toFixed(1)} kg</span>
+                      </div>
+                      <button type="button" className="ghost-button small-button" onClick={() => onEditWeight(weight)}>
+                        编辑
+                      </button>
+                    </div>
+                  ))}
+                  {month.weights.length === 0 && <p className="muted-text">本月没有体重记录。</p>}
+                </div>
+              </div>
+            </div>
+          </section>
+        ))}
+        {months.length === 0 && <p className="muted-text">还没有历史记录。</p>}
+      </div>
     </section>
   );
 }
@@ -705,6 +818,14 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   });
   const [loading, setLoading] = useState(true);
   const [editingRun, setEditingRun] = useState<RunningRecord | null>(null);
+  const [editingWeight, setEditingWeight] = useState<WeightRecord | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+
+  function scrollToForms() {
+    requestAnimationFrame(() => {
+      document.querySelector(".workspace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   async function refresh() {
     setLoading(true);
@@ -819,35 +940,38 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       <section className="workspace-grid">
         <RunForm editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={refresh} />
         <div className="side-column">
-          <WeightForm onSaved={refresh} />
+          <WeightForm editingWeight={editingWeight} onCancelEdit={() => setEditingWeight(null)} onSaved={refresh} />
           <section className="panel">
             <div className="panel-heading">
               <div>
-                <p className="eyebrow">Recent</p>
-                <h2>最近记录</h2>
+                <p className="eyebrow">History</p>
+                <h2>历史记录</h2>
               </div>
               {loading && <span className="loading-dot">同步中</span>}
             </div>
-            <div className="record-list">
-              {runs.slice(0, 6).map((run) => (
-                <div className="record-item" key={run.id}>
-                  <div>
-                    <strong>{run.dateTime.slice(0, 10)}</strong>
-                    <span>{run.distanceKm.toFixed(2)} km · {formatPace(run.avgPaceSecPerKm)} /km</span>
-                  </div>
-                  <div className="record-actions">
-                    <small>{run.screenshotKeys.length} 张截图</small>
-                    <button type="button" className="ghost-button small-button" onClick={() => setEditingRun(run)}>
-                      编辑
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {!runs.length && <p className="muted-text">还没有跑步记录。</p>}
+            <div className="history-launch">
+              <p className="muted-text">按月份管理跑步记录和体重记录，进入后可编辑历史数据。</p>
+              <button type="button" className="primary-button" onClick={() => setHistoryOpen((open) => !open)}>
+                {historyOpen ? "收起历史记录" : "打开历史记录"}
+              </button>
             </div>
           </section>
         </div>
       </section>
+      {historyOpen && (
+        <HistoryManager
+          runs={runs}
+          weights={weights}
+          onEditRun={(run) => {
+            setEditingRun(run);
+            scrollToForms();
+          }}
+          onEditWeight={(weight) => {
+            setEditingWeight(weight);
+            scrollToForms();
+          }}
+        />
+      )}
     </main>
   );
 }

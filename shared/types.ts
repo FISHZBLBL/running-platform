@@ -70,6 +70,7 @@ export type PredictionResult = {
   predictedDistanceDate: string | null;
   predictedGoalFinishDate: string | null;
   predictedFinishSecAtTargetDate: number | null;
+  distanceProjectionBasis: "achieved" | "long-run-progression" | "trend" | "insufficient";
   warnings: string[];
   recommendations: string[];
 };

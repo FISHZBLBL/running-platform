@@ -426,6 +426,84 @@ textarea {
   gap: 10px;
 }
 
+.history-launch {
+  display: grid;
+  gap: 12px;
+}
+
+.history-panel {
+  margin-top: 16px;
+}
+
+.history-list {
+  display: grid;
+  gap: 14px;
+}
+
+.history-month {
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.history-month-heading {
+  align-items: center;
+  border-bottom: 1px solid #edf1f7;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.history-month-heading strong {
+  color: #111827;
+  font-size: 18px;
+}
+
+.history-month-heading span {
+  color: #667085;
+  font-weight: 700;
+}
+
+.history-columns {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
+}
+
+.history-columns h3 {
+  color: #344054;
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+
+.history-items {
+  display: grid;
+  gap: 8px;
+}
+
+.history-item {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #edf1f7;
+  border-radius: 8px;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  padding: 10px;
+}
+
+.history-item div {
+  display: grid;
+  gap: 3px;
+}
+
+.history-item span {
+  color: #667085;
+}
+
 .record-item {
   align-items: center;
   border: 1px solid #edf1f7;
@@ -506,7 +584,8 @@ textarea {
   }
 
   .summary-grid,
-  .data-form {
+  .data-form,
+  .history-columns {
     grid-template-columns: 1fr;
   }
 
