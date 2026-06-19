@@ -314,6 +314,60 @@ function AuthDialog({ onAuthed }: { onAuthed: (user: PublicUser) => void }) {
   );
 }
 
+function roundDownToStep(value: number, step: number) {
+  return Math.floor(value / step) * step;
+}
+
+function roundUpToStep(value: number, step: number) {
+  return Math.ceil(value / step) * step;
+}
+
+function paceAxis(values: number[]) {
+  if (values.length === 0) return { min: 180, max: 540 };
+  const fastest = Math.min(...values);
+  const slowest = Math.max(...values);
+  const padding = Math.max(35, (slowest - fastest) * 0.25);
+  return {
+    min: Math.max(120, roundDownToStep(fastest - padding, 30)),
+    max: roundUpToStep(slowest + padding, 30)
+  };
+}
+
+function valueAxis(values: number[], fallback: { min: number; max: number }, step: number, minRange: number) {
+  if (values.length === 0) return fallback;
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  const range = Math.max(minRange, high - low);
+  const padding = range * 0.35;
+  return {
+    min: Math.max(0, roundDownToStep(low - padding, step)),
+    max: roundUpToStep(high + padding, step)
+  };
+}
+
+function chartTooltipFormatter(params: unknown) {
+  const items = Array.isArray(params) ? params : [params];
+  const first = items[0] as { axisValueLabel?: string; name?: string } | undefined;
+  const lines = [`<strong>${first?.axisValueLabel ?? first?.name ?? ""}</strong>`];
+  items.forEach((item) => {
+    const point = item as { marker?: string; seriesName?: string; value?: unknown };
+    const name = point.seriesName ?? "";
+    const value = point.value;
+    let formatted = "";
+    if (name === "体重-配速" && Array.isArray(value)) {
+      formatted = `${Number(value[0]).toFixed(1)} kg · ${formatPace(Number(value[1]))} /km · ${Number(value[2]).toFixed(1)} km`;
+    } else if (name.includes("配速")) {
+      formatted = `${formatPace(Number(value))} /km`;
+    } else if (name.includes("距离") || name.includes("月跑量")) {
+      formatted = `${Number(value).toFixed(2)} km`;
+    } else {
+      formatted = String(value ?? "");
+    }
+    lines.push(`${point.marker ?? ""}${name}: ${formatted}`);
+  });
+  return lines.join("<br />");
+}
+
 function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
   const ref = useRef<HTMLDivElement | null>(null);
 
@@ -325,6 +379,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
     const distances = sorted.map((run) => run.distanceKm);
     const monthly = monthlyMileage(sorted);
+    const paceRange = paceAxis(paces);
+    const weightRange = valueAxis(weights.map((weight) => weight.weightKg), { min: 65, max: 105 }, 2, 12);
     const scatter = sorted
       .map((run) => {
         const weight = nearestWeight(run, weights);
@@ -336,11 +392,15 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
       color: ["#1864ab", "#2b8a3e", "#c92a2a", "#7048e8", "#f08c00", "#0f766e"],
       tooltip: {
         trigger: "axis",
-        valueFormatter: (value: unknown) => (typeof value === "number" ? value.toFixed(2) : String(value))
+        formatter: chartTooltipFormatter
       },
-      legend: { top: 8, left: 16 },
+      legend: [
+        { top: 8, left: 16, data: ["实际配速", "配速拟合", "实际距离", "距离拟合"] },
+        { top: 352, left: 16, data: ["体重-配速"] },
+        { top: 602, left: 16, data: ["月跑量", "月跑量趋势"] }
+      ],
       grid: [
-        { top: 72, left: 64, right: 64, height: 260, containLabel: true },
+        { top: 72, left: 64, right: 64, height: 250, containLabel: true },
         { top: 410, left: 64, right: 64, height: 160, containLabel: true },
         { top: 660, left: 64, right: 64, height: 160, containLabel: true }
       ],
@@ -352,6 +412,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           nameLocation: "middle",
           nameGap: 32,
           gridIndex: 1,
+          min: weightRange.min,
+          max: weightRange.max,
           splitLine: { lineStyle: { type: "dashed" } }
         },
         { type: "category", data: monthly.map((item) => item.month), gridIndex: 2, nameGap: 24 }
@@ -363,6 +425,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           nameGap: 30,
           inverse: true,
           gridIndex: 0,
+          min: paceRange.min,
+          max: paceRange.max,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
         { type: "value", name: "距离 km", nameGap: 30, gridIndex: 0 },
@@ -372,6 +436,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           nameGap: 30,
           inverse: true,
           gridIndex: 1,
+          min: paceRange.min,
+          max: paceRange.max,
           axisLabel: { formatter: (value: number) => formatPace(value) }
         },
         { type: "value", name: "月跑量 km", nameGap: 30, gridIndex: 2 }
@@ -443,26 +509,29 @@ function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | 
           : "-";
   return (
     <section className="panel prediction-panel">
-      <div>
-        <p className="eyebrow">{modeTitle}</p>
-        <h2>{prediction.status === "ready" ? `${prediction.targetDistanceKm.toFixed(1)} km` : "数据不足"}</h2>
+      <div className="prediction-hero">
+        <div>
+          <p className="eyebrow">{modeTitle}</p>
+          <h2>{prediction.status === "ready" ? `${prediction.targetDistanceKm.toFixed(1)} km` : "数据不足"}</h2>
+        </div>
+        <span>{mode === "distance-date" ? "Distance" : mode === "finish-date" ? "Time Goal" : "Race Day"}</span>
       </div>
       <div className="metric-grid">
-        <div>
+        <div className="prediction-metric primary-metric">
           <span>{primaryLabel}</span>
           <strong>{primaryValue}</strong>
         </div>
         {mode === "distance-date" && (
-          <div>
+          <div className="prediction-metric">
             <span>按当前趋势完赛</span>
             <strong>{prediction.predictedTargetFinishSec ? formatDuration(prediction.predictedTargetFinishSec) : "-"}</strong>
           </div>
         )}
-        <div>
+        <div className="prediction-metric">
           <span>历史最长距离</span>
           <strong>{prediction.longestDistanceKm.toFixed(1)} km</strong>
         </div>
-        <div>
+        <div className="prediction-metric">
           <span>体重-配速相关</span>
           <strong>{prediction.weightPaceCorrelation?.toFixed(2) ?? "-"}</strong>
         </div>
@@ -642,7 +711,7 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
           <p>环境</p>
           <div className="weather-grid">
             <label>
-              气温 C
+              气温 ℃
               <input value={draft.temperatureC} onChange={(event) => setField("temperatureC", event.target.value)} inputMode="decimal" />
             </label>
             <label>

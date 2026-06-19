@@ -194,20 +194,20 @@ export function buildPrediction(
 
   const recommendations: string[] = [];
   if (paceTrend && paceTrend.slope < -0.5) {
-    recommendations.push("配速趋势正在改善，可以维持当前训练频率，并加入轻量节奏跑巩固速度。");
+    recommendations.push("配速趋势正在改善：可以维持当前训练频率，每周安排 1 次轻量节奏跑，例如热身 10 分钟后跑 2-4 km，强度控制在“能说短句但不能轻松聊天”，结束后慢跑或步行放松。");
   } else {
-    recommendations.push("配速改善不明显，建议每周安排一次短距离节奏跑，其他跑保持轻松强度。");
+    recommendations.push("配速改善不明显：建议每周安排 1 次短距离节奏跑，例如 1 km 热身后做 3-5 组 3 分钟稍快跑 + 2 分钟慢跑恢复；稍快跑不是冲刺，应比日常轻松跑快一些但能稳定完成。");
   }
   if (distanceTrend && distanceTrend.slope > 0.03) {
-    recommendations.push("单次距离呈上升趋势，长距离训练可继续每周小幅递增。");
+    recommendations.push("单次距离呈上升趋势：长距离训练可以继续小幅递增，优先把最长单次跑稳定在目标距离的 70%-85%，再考虑提高配速。");
   } else {
-    recommendations.push("若目标是延长距离，建议先稳定周跑量，再把最长单次跑逐步增加 5%-10%。");
+    recommendations.push("若目标是延长距离：先稳定每周跑量，再把最长单次跑逐步增加 5%-10%；每增加 2-3 周后安排 1 周回落，减少疲劳累积。");
   }
   if (heartRateTrend && heartRateTrend.slope > 0.2) {
-    recommendations.push("同等趋势下心率偏上升，注意恢复和低强度训练比例。");
+    recommendations.push("同等趋势下心率偏上升：建议提高低强度跑比例，至少保留 1-2 天恢复或休息；如果同样配速下心率持续升高，先减少强度再观察。");
   }
   if (weightPaceCorrelation !== null && Math.abs(weightPaceCorrelation) > 0.45) {
-    recommendations.push("体重与配速存在可观察相关性，后续可结合饮食和恢复记录进一步判断原因。");
+    recommendations.push("体重与配速存在可观察相关性：这只说明两组记录在当前样本里同步变化，不能直接说明体重导致配速变化；后续可同时记录睡眠、疲劳、饮食和天气再判断原因。");
   }
   const warnings: string[] = [];
   if (achievedTargetDate) {

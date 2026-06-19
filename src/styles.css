@@ -312,8 +312,31 @@ textarea {
 }
 
 .prediction-panel {
+  background:
+    linear-gradient(135deg, rgba(24, 100, 171, 0.08), rgba(15, 118, 110, 0.05)),
+    #ffffff;
   display: grid;
   gap: 16px;
+}
+
+.prediction-hero {
+  align-items: end;
+  border-bottom: 1px solid #d9e2ef;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding-bottom: 14px;
+}
+
+.prediction-hero span {
+  background: #e7f5ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1864ab;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+  white-space: nowrap;
 }
 
 .metric-grid,
@@ -323,13 +346,25 @@ textarea {
 }
 
 .metric-grid {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .metric-grid div,
 .metric-card {
   display: grid;
   gap: 4px;
+}
+
+.prediction-metric {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.primary-metric {
+  border-color: #a5d8ff;
+  box-shadow: inset 3px 0 0 #1864ab;
 }
 
 .metric-grid span,
@@ -690,6 +725,7 @@ textarea {
   .form-row,
   .performance-grid,
   .weather-grid,
+  .metric-grid,
   .history-columns {
     grid-template-columns: 1fr;
   }
