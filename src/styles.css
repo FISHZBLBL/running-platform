@@ -266,6 +266,35 @@ textarea {
   width: 100%;
 }
 
+.target-apply {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.target-apply span {
+  color: #9a3412;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.small-primary {
+  min-height: 42px;
+  white-space: nowrap;
+}
+
+.target-error {
+  background: #fff1f2;
+  border-radius: 8px;
+  color: #be123c;
+  font-size: 13px;
+  font-weight: 800;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 9px 11px;
+}
+
 .panel {
   padding: 16px;
 }

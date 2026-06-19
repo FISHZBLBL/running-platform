@@ -1,5 +1,5 @@
 import * as echarts from "echarts";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { PredictionResult, PublicUser, RunningRecord, RunSplit, WeightRecord } from "@shared/types";
 
@@ -810,12 +810,16 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [targetDistance, setTargetDistance] = useState(21.0975);
   const [targetDistanceInput, setTargetDistanceInput] = useState("21.0975");
   const [predictionMode, setPredictionMode] = useState<PredictionMode>("distance-date");
+  const [appliedPredictionMode, setAppliedPredictionMode] = useState<PredictionMode>("distance-date");
   const [targetFinishInput, setTargetFinishInput] = useState("2:00:00");
+  const [appliedTargetFinishInput, setAppliedTargetFinishInput] = useState("2:00:00");
   const [targetDateInput, setTargetDateInput] = useState(() => {
     const date = new Date();
     date.setMonth(date.getMonth() + 6);
     return date.toISOString().slice(0, 10);
   });
+  const [appliedTargetDateInput, setAppliedTargetDateInput] = useState(targetDateInput);
+  const [targetError, setTargetError] = useState("");
   const [loading, setLoading] = useState(true);
   const [editingRun, setEditingRun] = useState<RunningRecord | null>(null);
   const [editingWeight, setEditingWeight] = useState<WeightRecord | null>(null);
@@ -834,8 +838,8 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       api.listWeights(),
       api.prediction({
         targetDistanceKm: targetDistance,
-        targetFinishSec: predictionMode === "finish-date" ? parseDuration(targetFinishInput) : null,
-        targetDate: predictionMode === "date-finish" ? targetDateInput : null
+        targetFinishSec: appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null,
+        targetDate: appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null
       })
     ]);
     setRuns(runData.runs);
@@ -846,7 +850,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   useEffect(() => {
     refresh().catch(() => setLoading(false));
-  }, [targetDistance, predictionMode, targetFinishInput, targetDateInput]);
+  }, [targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
 
   const summary = useMemo(() => {
     const totalDistance = runs.reduce((sum, run) => sum + run.distanceKm, 0);
@@ -854,6 +858,34 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     const latestWeight = weights[0]?.weightKg ?? null;
     return { totalDistance, bestPace, latestWeight };
   }, [runs, weights]);
+
+  const targetIsDirty =
+    targetDistanceInput !== String(targetDistance) ||
+    predictionMode !== appliedPredictionMode ||
+    targetFinishInput !== appliedTargetFinishInput ||
+    targetDateInput !== appliedTargetDateInput;
+
+  function applyPredictionTarget(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+    const trimmedDistance = targetDistanceInput.trim();
+    if (!isCompleteDecimalInput(trimmedDistance)) {
+      setTargetError("请先完整输入目标距离。");
+      return;
+    }
+
+    const nextDistance = Number(trimmedDistance);
+    if (!Number.isFinite(nextDistance) || nextDistance <= 0) {
+      setTargetError("目标距离需要大于 0。");
+      return;
+    }
+
+    setTargetError("");
+    setTargetDistance(nextDistance);
+    setTargetDistanceInput(String(nextDistance));
+    setAppliedPredictionMode(predictionMode);
+    setAppliedTargetFinishInput(targetFinishInput);
+    setAppliedTargetDateInput(targetDateInput);
+  }
 
   return (
     <main className="app-shell">
@@ -875,7 +907,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               <p className="eyebrow">Trend Model</p>
               <h2>跑步表现与体重趋势</h2>
             </div>
-            <div className="target-controls">
+            <form className="target-controls" onSubmit={applyPredictionTarget}>
               <label className="target-input">
                 预测模式
                 <select value={predictionMode} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
@@ -889,14 +921,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
                 <input
                   inputMode="decimal"
                   value={targetDistanceInput}
-                  onBlur={() => setTargetDistanceInput(String(targetDistance))}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setTargetDistanceInput(value);
-                    if (isCompleteDecimalInput(value)) {
-                      setTargetDistance(Number(value));
-                    }
-                  }}
+                  onChange={(event) => setTargetDistanceInput(event.target.value)}
                 />
               </label>
               {predictionMode === "finish-date" && (
@@ -911,11 +936,18 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
                   <input type="date" value={targetDateInput} onChange={(event) => setTargetDateInput(event.target.value)} />
                 </label>
               )}
-            </div>
+              <div className="target-apply">
+                <button type="submit" className="primary-button small-primary">
+                  更新预测
+                </button>
+                {targetIsDirty && <span>未应用</span>}
+              </div>
+              {targetError && <p className="target-error">{targetError}</p>}
+            </form>
           </div>
           {runs.length ? <ResearchChart runs={runs} weights={weights} /> : <div className="empty-chart">保存跑步记录后显示趋势图。</div>}
         </div>
-        <PredictionPanel prediction={prediction} mode={predictionMode} />
+        <PredictionPanel prediction={prediction} mode={appliedPredictionMode} />
       </section>
 
       <section className="summary-grid">
