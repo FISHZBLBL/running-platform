@@ -4,6 +4,7 @@ import { api } from "./api";
 import type { PredictionResult, PublicUser, RunningRecord, RunSplit, WeightRecord } from "@shared/types";
 
 type AuthMode = "login" | "register";
+type PredictionMode = "distance-date" | "finish-date" | "date-finish";
 
 type SplitDraft = {
   distanceKm: string;
@@ -279,30 +280,59 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
   return <div className="chart" ref={ref} />;
 }
 
-function PredictionPanel({ prediction }: { prediction: PredictionResult | null }) {
+function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | null; mode: PredictionMode }) {
   if (!prediction) {
     return <div className="panel muted-panel">等待预测数据...</div>;
   }
+  const modeTitle =
+    mode === "distance-date"
+      ? "距离达成预测"
+      : mode === "finish-date"
+        ? "目标用时达成预测"
+        : "指定日期完赛预测";
+  const primaryLabel =
+    mode === "distance-date" ? "距离达成日期" : mode === "finish-date" ? "预计达标日期" : "预计最快完赛";
+  const primaryValue =
+    mode === "distance-date"
+      ? prediction.achievedTargetDate
+        ? `已于 ${prediction.achievedTargetDate} 达成`
+        : prediction.predictedDistanceDate ?? "-"
+      : mode === "finish-date"
+        ? prediction.predictedGoalFinishDate ?? "-"
+        : prediction.predictedFinishSecAtTargetDate
+          ? formatDuration(prediction.predictedFinishSecAtTargetDate)
+          : "-";
   return (
     <section className="panel prediction-panel">
       <div>
-        <p className="eyebrow">目标预测</p>
+        <p className="eyebrow">{modeTitle}</p>
         <h2>{prediction.status === "ready" ? `${prediction.targetDistanceKm.toFixed(1)} km` : "数据不足"}</h2>
       </div>
       <div className="metric-grid">
         <div>
-          <span>预计完赛</span>
+          <span>{primaryLabel}</span>
+          <strong>{primaryValue}</strong>
+        </div>
+        <div>
+          <span>按当前趋势完赛</span>
           <strong>{prediction.predictedTargetFinishSec ? formatDuration(prediction.predictedTargetFinishSec) : "-"}</strong>
         </div>
         <div>
-          <span>预计达成日期</span>
-          <strong>{prediction.predictedTargetDate ?? "-"}</strong>
+          <span>历史最长距离</span>
+          <strong>{prediction.longestDistanceKm.toFixed(1)} km</strong>
         </div>
         <div>
           <span>体重-配速相关</span>
           <strong>{prediction.weightPaceCorrelation?.toFixed(2) ?? "-"}</strong>
         </div>
       </div>
+      {prediction.warnings.length > 0 && (
+        <ul className="warning-list">
+          {prediction.warnings.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      )}
       <ul className="advice-list">
         {prediction.recommendations.map((item) => (
           <li key={item}>{item}</li>
@@ -501,6 +531,13 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [targetDistance, setTargetDistance] = useState(21.0975);
   const [targetDistanceInput, setTargetDistanceInput] = useState("21.0975");
+  const [predictionMode, setPredictionMode] = useState<PredictionMode>("distance-date");
+  const [targetFinishInput, setTargetFinishInput] = useState("2:00:00");
+  const [targetDateInput, setTargetDateInput] = useState(() => {
+    const date = new Date();
+    date.setMonth(date.getMonth() + 6);
+    return date.toISOString().slice(0, 10);
+  });
   const [loading, setLoading] = useState(true);
 
   async function refresh() {
@@ -508,7 +545,11 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     const [runData, weightData, predictionData] = await Promise.all([
       api.listRuns(),
       api.listWeights(),
-      api.prediction(targetDistance)
+      api.prediction({
+        targetDistanceKm: targetDistance,
+        targetFinishSec: predictionMode === "finish-date" ? parseDuration(targetFinishInput) : null,
+        targetDate: predictionMode === "date-finish" ? targetDateInput : null
+      })
     ]);
     setRuns(runData.runs);
     setWeights(weightData.weights);
@@ -518,7 +559,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   useEffect(() => {
     refresh().catch(() => setLoading(false));
-  }, [targetDistance]);
+  }, [targetDistance, predictionMode, targetFinishInput, targetDateInput]);
 
   const summary = useMemo(() => {
     const totalDistance = runs.reduce((sum, run) => sum + run.distanceKm, 0);
@@ -547,25 +588,47 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               <p className="eyebrow">Trend Model</p>
               <h2>跑步表现与体重趋势</h2>
             </div>
-            <label className="target-input">
-              目标距离 km
-              <input
-                inputMode="decimal"
-                value={targetDistanceInput}
-                onBlur={() => setTargetDistanceInput(String(targetDistance))}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  setTargetDistanceInput(value);
-                  if (isCompleteDecimalInput(value)) {
-                    setTargetDistance(Number(value));
-                  }
-                }}
-              />
-            </label>
+            <div className="target-controls">
+              <label className="target-input">
+                预测模式
+                <select value={predictionMode} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
+                  <option value="distance-date">只看距离达成日期</option>
+                  <option value="finish-date">目标距离 + 完赛时间</option>
+                  <option value="date-finish">目标距离 + 达成日期</option>
+                </select>
+              </label>
+              <label className="target-input">
+                目标距离 km
+                <input
+                  inputMode="decimal"
+                  value={targetDistanceInput}
+                  onBlur={() => setTargetDistanceInput(String(targetDistance))}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setTargetDistanceInput(value);
+                    if (isCompleteDecimalInput(value)) {
+                      setTargetDistance(Number(value));
+                    }
+                  }}
+                />
+              </label>
+              {predictionMode === "finish-date" && (
+                <label className="target-input">
+                  目标完赛
+                  <input value={targetFinishInput} onChange={(event) => setTargetFinishInput(event.target.value)} placeholder="2:00:00" />
+                </label>
+              )}
+              {predictionMode === "date-finish" && (
+                <label className="target-input">
+                  目标日期
+                  <input type="date" value={targetDateInput} onChange={(event) => setTargetDateInput(event.target.value)} />
+                </label>
+              )}
+            </div>
           </div>
           {runs.length ? <ResearchChart runs={runs} weights={weights} /> : <div className="empty-chart">保存跑步记录后显示趋势图。</div>}
         </div>
-        <PredictionPanel prediction={prediction} />
+        <PredictionPanel prediction={prediction} mode={predictionMode} />
       </section>
 
       <section className="summary-grid">

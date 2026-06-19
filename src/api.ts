@@ -34,6 +34,14 @@ export const api = {
     files.forEach((file) => form.append("screenshots", file));
     return request<{ keys: string[] }>("/api/uploads", { method: "POST", body: form });
   },
-  prediction: (targetDistanceKm: number) =>
-    request<{ prediction: PredictionResult }>(`/api/predictions?targetDistanceKm=${encodeURIComponent(targetDistanceKm)}`)
+  prediction: (params: { targetDistanceKm: number; targetFinishSec?: number | null; targetDate?: string | null }) => {
+    const searchParams = new URLSearchParams({ targetDistanceKm: String(params.targetDistanceKm) });
+    if (params.targetFinishSec) {
+      searchParams.set("targetFinishSec", String(params.targetFinishSec));
+    }
+    if (params.targetDate) {
+      searchParams.set("targetDate", params.targetDate);
+    }
+    return request<{ prediction: PredictionResult }>(`/api/predictions?${searchParams.toString()}`);
+  }
 };

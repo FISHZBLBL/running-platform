@@ -45,6 +45,10 @@ function dayIndex(dateTime: string, startMs: number): number {
   return Math.max(0, (new Date(dateTime).getTime() - startMs) / 86_400_000);
 }
 
+function dateFromDay(startMs: number, day: number): string {
+  return new Date(startMs + day * 86_400_000).toISOString().slice(0, 10);
+}
+
 function nearestWeight(runDate: string, weights: WeightRecord[]): WeightRecord | null {
   const runMs = new Date(runDate).getTime();
   let best: { record: WeightRecord; delta: number } | null = null;
@@ -57,19 +61,35 @@ function nearestWeight(runDate: string, weights: WeightRecord[]): WeightRecord |
   return best?.record ?? null;
 }
 
-export function buildPrediction(runs: RunningRecord[], weights: WeightRecord[], targetDistanceKm = 21.0975): PredictionResult {
+export function buildPrediction(
+  runs: RunningRecord[],
+  weights: WeightRecord[],
+  targetDistanceKm = 21.0975,
+  options: { targetFinishSec?: number | null; targetDate?: string | null } = {}
+): PredictionResult {
   const sortedRuns = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+  const longestDistanceKm = sortedRuns.reduce((max, run) => Math.max(max, run.distanceKm), 0);
+  const achievedRun = sortedRuns.find((run) => run.distanceKm >= targetDistanceKm);
+  const achievedTargetDate = achievedRun?.dateTime.slice(0, 10) ?? null;
   if (sortedRuns.length < 3) {
     return {
       status: "insufficient-data",
       runCount: sortedRuns.length,
       targetDistanceKm,
+      targetFinishSec: options.targetFinishSec ?? null,
+      targetDate: options.targetDate ?? null,
+      longestDistanceKm,
+      achievedTargetDate,
       paceTrend: null,
       distanceTrend: null,
       heartRateTrend: null,
       weightPaceCorrelation: null,
       predictedTargetFinishSec: null,
-      predictedTargetDate: null,
+      predictedTargetDate: achievedTargetDate,
+      predictedDistanceDate: achievedTargetDate,
+      predictedGoalFinishDate: null,
+      predictedFinishSecAtTargetDate: null,
+      warnings: achievedTargetDate ? [`已经在 ${achievedTargetDate} 完成过 ${targetDistanceKm.toFixed(2)} km。`] : [],
       recommendations: ["至少记录 3 次跑步后再生成趋势预测。"]
     };
   }
@@ -83,14 +103,52 @@ export function buildPrediction(runs: RunningRecord[], weights: WeightRecord[], 
   const heartRateTrend = linearRegression(heartRatePoints);
 
   const latestRunDay = pacePoints[pacePoints.length - 1].x;
+  const latestRunDate = sortedRuns[sortedRuns.length - 1].dateTime.slice(0, 10);
   const predictedPace = paceTrend ? Math.max(1, paceTrend.slope * latestRunDay + paceTrend.intercept) : sortedRuns.at(-1)!.avgPaceSecPerKm;
   const predictedTargetFinishSec = predictedPace * targetDistanceKm;
 
-  let predictedTargetDate: string | null = null;
-  if (distanceTrend && distanceTrend.slope > 0) {
+  let predictedDistanceDate: string | null = achievedTargetDate;
+  if (!achievedTargetDate && distanceTrend && distanceTrend.slope > 0) {
     const dayToTarget = (targetDistanceKm - distanceTrend.intercept) / distanceTrend.slope;
     if (Number.isFinite(dayToTarget) && dayToTarget >= latestRunDay) {
-      predictedTargetDate = new Date(startMs + dayToTarget * 86_400_000).toISOString().slice(0, 10);
+      predictedDistanceDate = dateFromDay(startMs, dayToTarget);
+    }
+  }
+
+  let predictedGoalFinishDate: string | null = null;
+  const targetFinishSec = options.targetFinishSec ?? null;
+  if (targetFinishSec && targetFinishSec > 0 && paceTrend) {
+    const targetPace = targetFinishSec / targetDistanceKm;
+    let paceDay: number | null = null;
+    const currentProjectedPace = paceTrend.slope * latestRunDay + paceTrend.intercept;
+    if (currentProjectedPace <= targetPace) {
+      paceDay = latestRunDay;
+    } else if (paceTrend.slope < 0) {
+      const day = (targetPace - paceTrend.intercept) / paceTrend.slope;
+      if (Number.isFinite(day) && day >= latestRunDay) {
+        paceDay = day;
+      }
+    }
+
+    let distanceDay: number | null = achievedTargetDate ? latestRunDay : null;
+    if (!achievedTargetDate && distanceTrend && distanceTrend.slope > 0) {
+      const day = (targetDistanceKm - distanceTrend.intercept) / distanceTrend.slope;
+      if (Number.isFinite(day) && day >= latestRunDay) {
+        distanceDay = day;
+      }
+    }
+
+    if (paceDay !== null && distanceDay !== null) {
+      predictedGoalFinishDate = dateFromDay(startMs, Math.max(paceDay, distanceDay));
+    }
+  }
+
+  let predictedFinishSecAtTargetDate: number | null = null;
+  const targetDate = options.targetDate ?? null;
+  if (targetDate && paceTrend) {
+    const targetDay = dayIndex(`${targetDate}T00:00:00.000Z`, startMs);
+    if (targetDay >= 0) {
+      predictedFinishSecAtTargetDate = Math.max(1, paceTrend.slope * targetDay + paceTrend.intercept) * targetDistanceKm;
     }
   }
 
@@ -119,17 +177,37 @@ export function buildPrediction(runs: RunningRecord[], weights: WeightRecord[], 
   if (weightPaceCorrelation !== null && Math.abs(weightPaceCorrelation) > 0.45) {
     recommendations.push("体重与配速存在可观察相关性，后续可结合饮食和恢复记录进一步判断原因。");
   }
+  const warnings: string[] = [];
+  if (achievedTargetDate) {
+    warnings.push(`已经在 ${achievedTargetDate} 完成过 ${targetDistanceKm.toFixed(2)} km，距离目标不需要再预测到未来。`);
+  } else if (!predictedDistanceDate) {
+    warnings.push("当前单次距离趋势不足以推算达成日期，建议增加更多长距离记录后再判断。");
+  }
+  if (targetDate && targetDate < latestRunDate) {
+    warnings.push("目标日期早于最近一次跑步记录，指定日期预测只作历史趋势参考。");
+  }
+  if (targetFinishSec && !predictedGoalFinishDate) {
+    warnings.push("当前配速或距离趋势不足以推算目标用时达成日期。");
+  }
 
   return {
     status: "ready",
     runCount: sortedRuns.length,
     targetDistanceKm,
+    targetFinishSec,
+    targetDate,
+    longestDistanceKm,
+    achievedTargetDate,
     paceTrend,
     distanceTrend,
     heartRateTrend,
     weightPaceCorrelation,
     predictedTargetFinishSec,
-    predictedTargetDate,
+    predictedTargetDate: predictedDistanceDate,
+    predictedDistanceDate,
+    predictedGoalFinishDate,
+    predictedFinishSecAtTargetDate,
+    warnings,
     recommendations
   };
 }

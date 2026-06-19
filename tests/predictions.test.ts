@@ -40,6 +40,31 @@ describe("buildPrediction", () => {
     expect(prediction.predictedTargetDate).toMatch(/2026-/);
   });
 
+  it("uses the achieved run date when the target distance already exists", () => {
+    const runs = [
+      run({ dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 360 }),
+      run({ dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 10, avgPaceSecPerKm: 350 }),
+      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 8, avgPaceSecPerKm: 340 })
+    ];
+    const prediction = buildPrediction(runs, [], 10);
+    expect(prediction.achievedTargetDate).toBe("2026-01-08");
+    expect(prediction.predictedDistanceDate).toBe("2026-01-08");
+  });
+
+  it("supports finish-time and target-date goal modes", () => {
+    const runs = [
+      run({ dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 390 }),
+      run({ dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 8, avgPaceSecPerKm: 360 }),
+      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 11, avgPaceSecPerKm: 330 })
+    ];
+    const prediction = buildPrediction(runs, [], 10, {
+      targetFinishSec: 3200,
+      targetDate: "2026-02-01"
+    });
+    expect(prediction.predictedGoalFinishDate).toMatch(/2026-/);
+    expect(prediction.predictedFinishSecAtTargetDate).toBeGreaterThan(0);
+  });
+
   it("calculates weight and pace correlation when dates are close", () => {
     const runs = [
       run({ dateTime: "2026-01-01T00:00:00.000Z", avgPaceSecPerKm: 360 }),
