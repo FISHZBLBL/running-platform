@@ -311,6 +311,15 @@ textarea {
   font-weight: 700;
 }
 
+.error-panel {
+  max-width: 560px;
+}
+
+.error-panel h1,
+.error-panel p {
+  margin: 0;
+}
+
 .prediction-panel {
   background:
     linear-gradient(135deg, rgba(24, 100, 171, 0.08), rgba(15, 118, 110, 0.05)),

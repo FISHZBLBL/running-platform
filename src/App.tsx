@@ -1,5 +1,5 @@
 import * as echarts from "echarts";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Component, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import type { PredictionResult, PublicUser, RunningRecord, RunSplit, WeightRecord } from "@shared/types";
 
@@ -39,6 +39,37 @@ type TextDetectionResult = {
   rawValue?: string;
 };
 
+type ErrorBoundaryProps = {
+  children: ReactNode;
+};
+
+type ErrorBoundaryState = {
+  error: Error | null;
+};
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { error };
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="boot-screen">
+          <div className="panel error-panel">
+            <p className="eyebrow">Preview Error</p>
+            <h1>页面预览出错</h1>
+            <p>{this.state.error.message}</p>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 declare global {
   interface Window {
     TextDetector?: new () => {
@@ -55,6 +86,13 @@ const emptySplit: SplitDraft = {
   cadenceSpm: ""
 };
 
+function createLocalId(): string {
+  if (crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function localDateTime(): string {
   const now = new Date();
   now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -63,7 +101,7 @@ function localDateTime(): string {
 
 function newRunDraft(): RunDraft {
   return {
-    id: crypto.randomUUID(),
+    id: createLocalId(),
     dateTime: localDateTime(),
     distanceKm: "",
     duration: "",
@@ -205,21 +243,86 @@ function groupHistoryByMonth(runs: RunningRecord[], weights: WeightRecord[]): Hi
     .sort((a, b) => b.month.localeCompare(a.month));
 }
 
+function normalizeDurationToken(value: string): string {
+  const parts = value.split(":");
+  if (parts.length === 2 && parts[0].length === 3) {
+    return `${parts[0][0]}:${parts[0].slice(1)}:${parts[1]}`;
+  }
+  return value;
+}
+
+function sectionAfterLabel(text: string, label: RegExp, stopLabels: string[]): string {
+  const match = label.exec(text);
+  if (!match || match.index === undefined) return "";
+  const start = match.index + match[0].length;
+  const stop = stopLabels
+    .map((item) => text.indexOf(item, start))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+  return text.slice(start, stop ?? start + 120);
+}
+
+function metricInRange(section: string, min: number, max: number): string | null {
+  const matches = [...section.matchAll(/\d+(?:\.\d+)?/g)].map((match) => Number(match[0]));
+  const value = matches.find((item) => item >= min && item <= max);
+  return value === undefined ? null : String(value);
+}
+
+function formatPaceCandidate(minutesText: string, secondsText: string): string | null {
+  const minutes = Number(minutesText);
+  const seconds = Number(secondsText);
+  if (minutes < 2 || minutes > 15 || seconds < 0 || seconds >= 60) return null;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function extractPaceValue(text: string, section: string): string | null {
+  const pacePatterns = [
+    /(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/,
+    /(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?/
+  ];
+  for (const pattern of pacePatterns) {
+    const match = section.match(pattern);
+    if (!match) continue;
+    const value = formatPaceCandidate(match[1], match[2]);
+    if (value) return value;
+  }
+
+  const labeledMatch = text.match(
+    /(?:平均配速|配速).{0,180}?(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/
+  );
+  if (labeledMatch) return formatPaceCandidate(labeledMatch[1], labeledMatch[2]);
+
+  const unitMatch = text.match(/(\d{1,2})\s*['′’‘＇´:：]\s*(\d{2})\s*(?:"|″|”|''|’’)?\s*(?:[\/／]?\s*(?:km|KM|公里))/);
+  return unitMatch ? formatPaceCandidate(unitMatch[1], unitMatch[2]) : null;
+}
+
+function extractCadenceValue(text: string, section: string): string | null {
+  const unitMatch = text.match(/(\d{2,3})\s*(?:步\s*[\/／]\s*(?:分|分钟|分鐘)|步\s*(?:分|分钟|分鐘)|spm|SPM)/);
+  if (unitMatch) {
+    const value = Number(unitMatch[1]);
+    if (value >= 120 && value <= 230) return String(value);
+  }
+  return metricInRange(section, 120, 230);
+}
+
 function extractRunDraftFromText(text: string): Partial<RunDraft> {
   const normalized = text.replace(/\s+/g, " ");
   const distanceMatch = normalized.match(/(\d+(?:\.\d+)?)\s*(?:km|KM|公里)/);
-  const durationMatch = normalized.match(/(\d{1,2}:\d{2}(?::\d{2})?)/);
-  const paceMatch = normalized.match(/(\d{1,2})['′:](\d{2})(?:"|″)?\s*(?:\/?\s*(?:km|公里))?/);
-  const heartRateMatch = normalized.match(/(?:心率|bpm|BPM)[^\d]*(\d{2,3})/);
-  const cadenceMatch = normalized.match(/(?:步频|spm|SPM)[^\d]*(\d{2,3})/);
-  const powerMatch = normalized.match(/(?:功率|W|w)[^\d]*(\d{2,4})/);
+  const durationMatch =
+    normalized.match(/(?:体能训练时间|训练时间|总用时|用时).{0,80}?(\d{1,3}:\d{2}(?::\d{2})?)/) ??
+    normalized.match(/(\d{1,3}:\d{2}(?::\d{2})?)/);
+  const paceSection = sectionAfterLabel(normalized, /(?:平均配速|配速)/, ["平均心率", "平均步频", "平均功率", "环境"]);
+  const heartRateSection = sectionAfterLabel(normalized, /(?:平均心率|心率)/, ["平均步频", "平均功率", "平均配速", "环境"]);
+  const cadenceSection = sectionAfterLabel(normalized, /(?:平均步频|步频)/, ["平均配速", "平均心率", "平均功率", "环境"]);
+  const powerSection = sectionAfterLabel(normalized, /(?:平均功率|功率)/, ["平均配速", "平均步频", "平均心率", "环境"]);
+  const paceValue = extractPaceValue(normalized, paceSection);
   const result: Partial<RunDraft> = {};
   if (distanceMatch) result.distanceKm = distanceMatch[1];
-  if (durationMatch) result.duration = durationMatch[1];
-  if (paceMatch) result.avgPace = `${paceMatch[1]}:${paceMatch[2]}`;
-  if (heartRateMatch) result.avgHeartRateBpm = heartRateMatch[1];
-  if (cadenceMatch) result.avgCadenceSpm = cadenceMatch[1];
-  if (powerMatch) result.avgPowerW = powerMatch[1];
+  if (durationMatch) result.duration = normalizeDurationToken(durationMatch[1]);
+  if (paceValue) result.avgPace = paceValue;
+  result.avgHeartRateBpm = metricInRange(heartRateSection, 60, 220) ?? result.avgHeartRateBpm;
+  result.avgCadenceSpm = extractCadenceValue(normalized, cadenceSection) ?? result.avgCadenceSpm;
+  result.avgPowerW = metricInRange(powerSection, 50, 600) ?? result.avgPowerW;
   return result;
 }
 
@@ -1227,5 +1330,5 @@ export default function App() {
     return <div className="boot-screen">Loading...</div>;
   }
 
-  return user ? <Dashboard user={user} onLogout={logout} /> : <AuthDialog onAuthed={setUser} />;
+  return <ErrorBoundary>{user ? <Dashboard user={user} onLogout={logout} /> : <AuthDialog onAuthed={setUser} />}</ErrorBoundary>;
 }
