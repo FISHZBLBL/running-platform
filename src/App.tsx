@@ -224,15 +224,33 @@ function extractRunDraftFromText(text: string): Partial<RunDraft> {
 }
 
 async function detectTextFromImages(files: File[]): Promise<string> {
-  if (!window.TextDetector) {
-    throw new Error("当前浏览器不支持内置截图文字识别，请根据截图预览手动校对录入。");
-  }
-  const detector = new window.TextDetector();
   const texts: string[] = [];
-  for (const file of files) {
-    const bitmap = await createImageBitmap(file);
-    const results = await detector.detect(bitmap);
-    texts.push(...results.map((result) => result.rawValue ?? "").filter(Boolean));
+
+  if (window.TextDetector) {
+    const detector = new window.TextDetector();
+    for (const file of files) {
+      const bitmap = await createImageBitmap(file);
+      const results = await detector.detect(bitmap);
+      texts.push(...results.map((result) => result.rawValue ?? "").filter(Boolean));
+    }
+    return texts.join("\n");
+  }
+
+  const { createWorker, PSM } = await import("tesseract.js");
+  const worker = await createWorker(["eng", "chi_sim"]);
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      preserve_interword_spaces: "1"
+    });
+    for (const file of files) {
+      const result = await worker.recognize(file);
+      if (result.data.text.trim()) {
+        texts.push(result.data.text.trim());
+      }
+    }
+  } finally {
+    await worker.terminate();
   }
   return texts.join("\n");
 }
@@ -698,11 +716,11 @@ function RunForm({ editingRun, onCancelEdit, onSaved }: { editingRun: RunningRec
   }
 
   async function recognizeScreenshots() {
-    setMessage("");
     if (files.length === 0) {
       setMessage("请先选择一张或多张截图。");
       return;
     }
+    setMessage(window.TextDetector ? "正在使用浏览器内置识别，请稍等。" : "正在使用兼容 OCR 识别，首次加载可能需要几十秒。");
     try {
       const text = await detectTextFromImages(files);
       const patch = extractRunDraftFromText(text);
