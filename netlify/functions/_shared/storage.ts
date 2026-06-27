@@ -1,10 +1,8 @@
 import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createHash, createHmac } from "node:crypto";
 import path from "node:path";
-import { getEnv } from "./env";
-
-const require = createRequire(import.meta.url);
+import { getEnv, isCloudFunctionRuntime } from "./env";
 
 export type StoredFile = {
   body: Buffer;
@@ -19,43 +17,26 @@ export interface StorageAdapter {
   list(prefix: string): Promise<string[]>;
 }
 
-type CosClient = {
-  getObject(options: Record<string, unknown>, callback: (error: Error | null, data: { Body?: Buffer | string }) => void): void;
-  putObject(options: Record<string, unknown>, callback: (error: Error | null) => void): void;
-  deleteObject(options: Record<string, unknown>, callback: (error: Error | null) => void): void;
-  getBucket(options: Record<string, unknown>, callback: (error: Error | null, data: { Contents?: Array<{ Key: string }> }) => void): void;
-};
-
 class CosStorage implements StorageAdapter {
-  private client: CosClient;
   private bucket: string;
   private region: string;
+  private secretId: string;
+  private secretKey: string;
 
   constructor() {
-    this.bucket = getEnv("COS_BUCKET")!;
-    this.region = getEnv("COS_REGION")!;
-    const COS = require("cos-nodejs-sdk-v5") as new (options: Record<string, string | undefined>) => CosClient;
-    this.client = new COS({
-      SecretId: getEnv("COS_SECRET_ID"),
-      SecretKey: getEnv("COS_SECRET_KEY")
-    });
+    this.bucket = getEnv("COS_BUCKET", "running-platform-1323797631")!;
+    this.region = getEnv("COS_REGION", "ap-beijing")!;
+    this.secretId = getEnv("COS_SECRET_ID")!;
+    this.secretKey = getEnv("COS_SECRET_KEY")!;
   }
 
   async getText(key: string): Promise<string | null> {
-    try {
-      const data = await new Promise<{ Body?: Buffer | string }>((resolve, reject) => {
-        this.client.getObject({ Bucket: this.bucket, Region: this.region, Key: key }, (error, response) => {
-          if (error) reject(error);
-          else resolve(response);
-        });
-      });
-      return Buffer.isBuffer(data.Body) ? data.Body.toString("utf8") : String(data.Body ?? "");
-    } catch (error) {
-      if (error instanceof Error && /NoSuchKey|not exist|404/.test(error.message)) {
-        return null;
-      }
-      throw error;
+    const response = await this.request("GET", key);
+    if (response.status === 404) {
+      return null;
     }
+    await this.assertOk(response, key);
+    return response.text();
   }
 
   async putText(key: string, value: string): Promise<void> {
@@ -67,41 +48,107 @@ class CosStorage implements StorageAdapter {
   }
 
   async delete(key: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.client.deleteObject({ Bucket: this.bucket, Region: this.region, Key: key }, (error) => {
-        if (error) reject(error);
-        else resolve();
-      });
-    });
+    const response = await this.request("DELETE", key);
+    await this.assertOk(response, key);
   }
 
   async list(prefix: string): Promise<string[]> {
     const keys: string[] = [];
     let marker: string | undefined;
     do {
-      const data = await new Promise<{ Contents?: Array<{ Key: string }>; NextMarker?: string }>((resolve, reject) => {
-        this.client.getBucket({ Bucket: this.bucket, Region: this.region, Prefix: prefix, Marker: marker }, (error, response) => {
-          if (error) reject(error);
-          else resolve(response);
-        });
-      });
-      keys.push(...(data.Contents ?? []).map((item) => item.Key).filter(Boolean));
-      marker = data.NextMarker;
+      const params: Record<string, string> = { prefix };
+      if (marker) {
+        params.marker = marker;
+      }
+      const response = await this.request("GET", "", undefined, params);
+      await this.assertOk(response, prefix);
+      const xml = await response.text();
+      keys.push(...[...xml.matchAll(/<Key>([^<]+)<\/Key>/g)].map((match) => decodeXml(match[1])));
+      marker = xml.match(/<NextMarker>([^<]+)<\/NextMarker>/)?.[1];
     } while (marker);
     return keys;
   }
 
   private async putObject(key: string, body: Buffer, contentType: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      this.client.putObject(
-        { Bucket: this.bucket, Region: this.region, Key: key, Body: body, ContentType: contentType },
-        (error) => {
-          if (error) reject(error);
-          else resolve();
-        }
-      );
+    const response = await this.request("PUT", key, { body, contentType });
+    await this.assertOk(response, key);
+  }
+
+  private async request(
+    method: "GET" | "PUT" | "DELETE",
+    key: string,
+    payload?: { body: Buffer; contentType: string },
+    query: Record<string, string> = {}
+  ): Promise<Response> {
+    const host = `${this.bucket}.cos.${this.region}.myqcloud.com`;
+    const pathname = key ? `/${encodeCosPath(key)}` : "/";
+    const searchParams = new URLSearchParams();
+    for (const [paramKey, paramValue] of Object.entries(query).sort(([a], [b]) => a.localeCompare(b))) {
+      searchParams.set(paramKey, paramValue);
+    }
+    const queryString = searchParams.toString();
+    const headers = new Headers({
+      Authorization: this.authorization(method.toLowerCase(), pathname, query),
+      Host: host
+    });
+    if (payload?.contentType) {
+      headers.set("Content-Type", payload.contentType);
+    }
+    return fetch(`https://${host}${pathname}${queryString ? `?${queryString}` : ""}`, {
+      method,
+      headers,
+      body: payload?.body ? new Uint8Array(payload.body) : undefined
     });
   }
+
+  private authorization(method: string, pathname: string, query: Record<string, string>): string {
+    const now = Math.floor(Date.now() / 1000);
+    const keyTime = `${now - 60};${now + 600}`;
+    const signKey = hmacSha1(this.secretKey, keyTime);
+    const sortedQuery = Object.entries(query).sort(([a], [b]) => a.localeCompare(b));
+    const urlParamList = sortedQuery.map(([key]) => key.toLowerCase()).join(";");
+    const httpParameters = sortedQuery
+      .map(([key, value]) => `${encodeURIComponent(key).toLowerCase()}=${encodeURIComponent(value)}`)
+      .join("&");
+    const headerList = "host";
+    const httpHeaders = `host=${this.bucket}.cos.${this.region}.myqcloud.com`;
+    const httpString = `${method}\n${pathname}\n${httpParameters}\n${httpHeaders}\n`;
+    const stringToSign = `sha1\n${keyTime}\n${sha1(httpString)}\n`;
+    const signature = hmacSha1(signKey, stringToSign);
+    return [
+      "q-sign-algorithm=sha1",
+      `q-ak=${this.secretId}`,
+      `q-sign-time=${keyTime}`,
+      `q-key-time=${keyTime}`,
+      `q-header-list=${headerList}`,
+      `q-url-param-list=${urlParamList}`,
+      `q-signature=${signature}`
+    ].join("&");
+  }
+
+  private async assertOk(response: Response, key: string): Promise<void> {
+    if (response.ok) {
+      return;
+    }
+    const text = await response.text().catch(() => "");
+    throw new Error(`COS request failed for ${key || "/"}: ${response.status} ${text.slice(0, 240)}`);
+  }
+}
+
+function sha1(value: string): string {
+  return createHash("sha1").update(value).digest("hex");
+}
+
+function hmacSha1(key: string, value: string): string {
+  return createHmac("sha1", key).update(value).digest("hex");
+}
+
+function encodeCosPath(key: string): string {
+  return key.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
+function decodeXml(value: string): string {
+  return value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }
 
 class LocalStorage implements StorageAdapter {
@@ -165,11 +212,11 @@ let adapter: StorageAdapter | null = null;
 
 export function storage(): StorageAdapter {
   if (!adapter) {
-    const hasCos = getEnv("COS_SECRET_ID") && getEnv("COS_SECRET_KEY") && getEnv("COS_BUCKET") && getEnv("COS_REGION");
-    if (!hasCos && getEnv("CONTEXT") === "production") {
-      throw new Error("COS environment variables must be configured in production.");
+    const hasCosSecrets = Boolean(getEnv("COS_SECRET_ID") && getEnv("COS_SECRET_KEY"));
+    if (!hasCosSecrets && (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime())) {
+      throw new Error("COS_SECRET_ID and COS_SECRET_KEY must be configured for Netlify Functions.");
     }
-    adapter = hasCos ? new CosStorage() : new LocalStorage();
+    adapter = hasCosSecrets ? new CosStorage() : new LocalStorage();
   }
   return adapter;
 }

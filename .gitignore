@@ -1,6 +1,8 @@
 node_modules/
 dist/
 .netlify/
+.npm-cache/
+.deploy-src/
 .env
 .env.*
 !.env.example

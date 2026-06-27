@@ -1,4 +1,4 @@
-import type { RunningRecord, RunSplit, Weather, WeightRecord } from "./types";
+import type { RunningRecord, RunningShoe, RunSplit, Weather, WeightRecord } from "./types";
 
 export class ValidationError extends Error {
   status = 400;
@@ -24,6 +24,26 @@ function stringValue(value: unknown, label: string): string {
     throw new ValidationError(`${label} is required.`);
   }
   return value.trim();
+}
+
+function optionalText(value: unknown, label: string, maxLength = 2000): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") {
+    throw new ValidationError(`${label} must be text.`);
+  }
+  const text = value.trim();
+  if (text.length > maxLength) {
+    throw new ValidationError(`${label} must be ${maxLength} characters or fewer.`);
+  }
+  return text;
+}
+
+function optionalString(value: unknown, label: string): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string") {
+    throw new ValidationError(`${label} must be text.`);
+  }
+  return value.trim() || null;
 }
 
 function validateDateTime(value: unknown): string {
@@ -76,6 +96,7 @@ export function validateRunPayload(input: unknown, existing?: RunningRecord): Ru
   return {
     id: stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"),
     dateTime: validateDateTime(payload.dateTime),
+    shoeId: optionalString(payload.shoeId, "shoeId"),
     distanceKm,
     durationSec,
     avgPaceSecPerKm,
@@ -83,8 +104,26 @@ export function validateRunPayload(input: unknown, existing?: RunningRecord): Ru
     avgCadenceSpm: finiteNumber(payload.avgCadenceSpm, "avgCadenceSpm", 1),
     avgHeartRateBpm: finiteNumber(payload.avgHeartRateBpm, "avgHeartRateBpm", 1),
     weather: validateWeather(payload.weather),
+    notes: optionalText(payload.notes, "notes"),
     splits: Array.isArray(payload.splits) ? payload.splits.map(validateSplit) : [],
     screenshotKeys: Array.isArray(payload.screenshotKeys) ? payload.screenshotKeys.filter((key) => typeof key === "string") : [],
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now
+  };
+}
+
+export function validateShoePayload(input: unknown, existing?: RunningShoe): RunningShoe {
+  const payload = input as Partial<RunningShoe>;
+  const now = new Date().toISOString();
+  const name = stringValue(payload.name, "name");
+  if (name.length > 80) {
+    throw new ValidationError("name must be 80 characters or fewer.");
+  }
+  return {
+    id: stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"),
+    name,
+    photoKey: optionalString(payload.photoKey, "photoKey"),
+    photoUrl: optionalString(payload.photoUrl, "photoUrl"),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
