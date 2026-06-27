@@ -1,4 +1,5 @@
 import type { PredictionResult, RunningRecord, TrendLine, WeightRecord } from "./types";
+import { buildVdotModel, predictDurationFromVdot, requiredVdotForGoal } from "./vdot";
 
 type Point = { x: number; y: number };
 
@@ -91,6 +92,7 @@ export function buildPrediction(
   const longestDistanceKm = sortedRuns.reduce((max, run) => Math.max(max, run.distanceKm), 0);
   const achievedRun = sortedRuns.find((run) => run.distanceKm >= targetDistanceKm);
   const achievedTargetDate = achievedRun?.dateTime.slice(0, 10) ?? null;
+  const vdotModel = buildVdotModel(sortedRuns);
   if (sortedRuns.length < 3) {
     return {
       status: "insufficient-data",
@@ -110,6 +112,9 @@ export function buildPrediction(
       predictedGoalFinishDate: null,
       predictedFinishSecAtTargetDate: null,
       distanceProjectionBasis: achievedTargetDate ? "achieved" : "insufficient",
+      vdotModel,
+      vdotPredictedFinishRangeSec: null,
+      requiredVdotForTargetFinish: null,
       warnings: achievedTargetDate ? [`已经在 ${achievedTargetDate} 完成过 ${targetDistanceKm.toFixed(2)} km。`] : [],
       recommendations: ["至少记录 3 次跑步后再生成趋势预测。"]
     };
@@ -125,62 +130,43 @@ export function buildPrediction(
 
   const latestRunDay = pacePoints[pacePoints.length - 1].x;
   const latestRunDate = sortedRuns[sortedRuns.length - 1].dateTime.slice(0, 10);
-  const predictedPace = paceTrend ? Math.max(1, paceTrend.slope * latestRunDay + paceTrend.intercept) : sortedRuns.at(-1)!.avgPaceSecPerKm;
-  const predictedTargetFinishSec = predictedPace * targetDistanceKm;
+  const vdotPredictedFinishRangeSec =
+    vdotModel.range && vdotModel.conservativeVdot
+      ? {
+          conservative: predictDurationFromVdot(vdotModel.conservativeVdot, targetDistanceKm),
+          fastest: predictDurationFromVdot(vdotModel.range.max, targetDistanceKm)
+        }
+      : null;
+  const predictedTargetFinishSec = vdotPredictedFinishRangeSec?.conservative ?? null;
 
   let distanceProjectionBasis: PredictionResult["distanceProjectionBasis"] = achievedTargetDate ? "achieved" : "insufficient";
   let predictedDistanceDate: string | null = achievedTargetDate;
-  if (!achievedTargetDate && distanceTrend && distanceTrend.slope > 0) {
-    const dayToTarget = (targetDistanceKm - distanceTrend.intercept) / distanceTrend.slope;
-    if (Number.isFinite(dayToTarget) && dayToTarget >= latestRunDay) {
-      predictedDistanceDate = dateFromDay(startMs, dayToTarget);
-      distanceProjectionBasis = "trend";
-    }
-  }
   if (!achievedTargetDate) {
     const progressiveDate = progressiveDistanceDate(sortedRuns, targetDistanceKm);
     if (progressiveDate) {
       distanceProjectionBasis = "long-run-progression";
-      if (!predictedDistanceDate || new Date(progressiveDate).getTime() < new Date(predictedDistanceDate).getTime()) {
-        predictedDistanceDate = progressiveDate;
-      }
+      predictedDistanceDate = progressiveDate;
     }
   }
 
   let predictedGoalFinishDate: string | null = null;
   const targetFinishSec = options.targetFinishSec ?? null;
-  if (targetFinishSec && targetFinishSec > 0 && paceTrend) {
-    const targetPace = targetFinishSec / targetDistanceKm;
-    let paceDay: number | null = null;
-    const currentProjectedPace = paceTrend.slope * latestRunDay + paceTrend.intercept;
-    if (currentProjectedPace <= targetPace) {
-      paceDay = latestRunDay;
-    } else if (paceTrend.slope < 0) {
-      const day = (targetPace - paceTrend.intercept) / paceTrend.slope;
-      if (Number.isFinite(day) && day >= latestRunDay) {
-        paceDay = day;
-      }
-    }
-
-    let distanceDay: number | null = achievedTargetDate ? latestRunDay : null;
-    if (!achievedTargetDate && predictedDistanceDate) {
-      const day = dayIndex(`${predictedDistanceDate}T00:00:00.000Z`, startMs);
-      if (day >= latestRunDay) {
-        distanceDay = day;
-      }
-    }
-
-    if (paceDay !== null && distanceDay !== null) {
-      predictedGoalFinishDate = dateFromDay(startMs, Math.max(paceDay, distanceDay));
-    }
+  const requiredVdotForTargetFinish = targetFinishSec && targetFinishSec > 0 ? requiredVdotForGoal(targetDistanceKm, targetFinishSec) : null;
+  if (
+    requiredVdotForTargetFinish !== null &&
+    vdotModel.range &&
+    requiredVdotForTargetFinish <= vdotModel.range.max &&
+    (achievedTargetDate || predictedDistanceDate)
+  ) {
+    predictedGoalFinishDate = achievedTargetDate ?? predictedDistanceDate;
   }
 
   let predictedFinishSecAtTargetDate: number | null = null;
   const targetDate = options.targetDate ?? null;
-  if (targetDate && paceTrend) {
-    const targetDay = dayIndex(`${targetDate}T00:00:00.000Z`, startMs);
-    if (targetDay >= 0) {
-      predictedFinishSecAtTargetDate = Math.max(1, paceTrend.slope * targetDay + paceTrend.intercept) * targetDistanceKm;
+  if (targetDate && vdotModel.range) {
+    const canUseTargetDate = !predictedDistanceDate || new Date(targetDate).getTime() >= new Date(predictedDistanceDate).getTime();
+    if (canUseTargetDate) {
+      predictedFinishSecAtTargetDate = predictDurationFromVdot(vdotModel.range.max, targetDistanceKm);
     }
   }
 
@@ -193,6 +179,14 @@ export function buildPrediction(
   const weightPaceCorrelation = pearson(correlationPoints);
 
   const recommendations: string[] = [];
+  if (vdotModel.range) {
+    recommendations.push(
+      `当前 PB 折算 VDOT 约为 ${vdotModel.range.min.toFixed(1)}-${vdotModel.range.max.toFixed(1)}。短距离跑力不一定能完整迁移到长距离，预测默认采用保守跑力值估算。`
+    );
+  }
+  if (vdotModel.personalBests.length >= 2 && vdotModel.range && vdotModel.range.max - vdotModel.range.min > 2) {
+    recommendations.push("不同距离 PB 的 VDOT 差异较大：说明短距离速度、长距离耐力或当天状态存在差别，建议把长距离预测优先参考相近或更长距离 PB。");
+  }
   if (paceTrend && paceTrend.slope < -0.5) {
     recommendations.push("配速趋势正在改善：可以维持当前训练频率，每周安排 1 次轻量节奏跑，例如热身 10 分钟后跑 2-4 km，强度控制在“能说短句但不能轻松聊天”，结束后慢跑或步行放松。");
   } else {
@@ -221,7 +215,10 @@ export function buildPrediction(
     warnings.push("目标日期早于最近一次跑步记录，指定日期预测只作历史趋势参考。");
   }
   if (targetFinishSec && !predictedGoalFinishDate) {
-    warnings.push("当前配速或距离趋势不足以推算目标用时达成日期。");
+    warnings.push("当前 VDOT 跑力范围或距离基础不足以支持目标用时，建议增加相近距离 PB 或降低目标用时。");
+  }
+  if (vdotPredictedFinishRangeSec && targetDistanceKm > longestDistanceKm * 1.5) {
+    warnings.push("目标距离明显长于当前最长跑，VDOT 只能说明速度能力，长距离完赛还需要单次距离和周跑量支撑。");
   }
 
   return {
@@ -242,6 +239,9 @@ export function buildPrediction(
     predictedGoalFinishDate,
     predictedFinishSecAtTargetDate,
     distanceProjectionBasis,
+    vdotModel,
+    vdotPredictedFinishRangeSec,
+    requiredVdotForTargetFinish,
     warnings,
     recommendations
   };

@@ -158,6 +158,11 @@ textarea {
   color: #27364a;
 }
 
+.danger-button {
+  border-color: #fecdd3;
+  color: #be123c;
+}
+
 .form-error,
 .form-message {
   border-radius: 10px;
@@ -193,6 +198,34 @@ textarea {
 
 .topbar h1 {
   font-size: 30px;
+}
+
+.view-tabs {
+  background: #eef4fb;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px;
+}
+
+.view-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #52647a;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  min-height: 38px;
+  padding: 8px 18px;
+}
+
+.view-tabs button.active {
+  background: #ffffff;
+  color: #1864ab;
+  box-shadow: 0 6px 14px rgba(31, 41, 55, 0.08);
 }
 
 .user-actions {
@@ -236,8 +269,42 @@ textarea {
 }
 
 .chart {
-  height: 860px;
+  height: 1100px;
   width: 100%;
+}
+
+.research-chart {
+  position: relative;
+}
+
+.chart-volume-tabs {
+  background: #eef4fb;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  position: absolute;
+  right: 18px;
+  top: 792px;
+  z-index: 2;
+}
+
+.chart-volume-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: #52647a;
+  font-size: 13px;
+  font-weight: 900;
+  min-height: 32px;
+  padding: 6px 12px;
+}
+
+.chart-volume-tabs button.active {
+  background: #ffffff;
+  box-shadow: 0 6px 14px rgba(31, 41, 55, 0.08);
+  color: #1864ab;
 }
 
 .empty-chart {
@@ -248,7 +315,7 @@ textarea {
   color: #667085;
   display: flex;
   font-weight: 700;
-  height: 860px;
+  height: 1100px;
   justify-content: center;
   text-align: center;
 }
@@ -309,6 +376,15 @@ textarea {
 .muted-panel {
   color: #667085;
   font-weight: 700;
+}
+
+.error-panel {
+  max-width: 560px;
+}
+
+.error-panel h1,
+.error-panel p {
+  margin: 0;
 }
 
 .prediction-panel {
@@ -413,6 +489,11 @@ textarea {
   grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
 }
 
+.records-page {
+  display: grid;
+  gap: 16px;
+}
+
 .side-column {
   display: grid;
   gap: 16px;
@@ -509,8 +590,13 @@ textarea {
 .screenshot-toolbar {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
+}
+
+.screenshot-toolbar .inline-actions {
+  justify-content: flex-start;
 }
 
 .screenshot-grid {
@@ -531,6 +617,244 @@ textarea {
 .record-list {
   display: grid;
   gap: 10px;
+}
+
+.vdot-page {
+  display: grid;
+  gap: 16px;
+}
+
+.vdot-summary-panel,
+.vdot-table-panel {
+  overflow: hidden;
+}
+
+.vdot-summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  margin-bottom: 14px;
+  max-width: 360px;
+}
+
+.pb-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+.pb-card {
+  background: #f8fafc;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+}
+
+.pb-card span,
+.pb-card small {
+  color: #667085;
+  font-weight: 800;
+}
+
+.pb-card strong {
+  color: #111827;
+  font-size: 22px;
+}
+
+.vdot-table-wrap {
+  max-height: 680px;
+  overflow-x: auto;
+  overflow-y: auto;
+  padding-bottom: 4px;
+}
+
+.vdot-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 1120px;
+  width: 100%;
+}
+
+.vdot-table th,
+.vdot-table td {
+  border-bottom: 1px solid #edf1f7;
+  border-right: 1px solid #edf1f7;
+  padding: 9px 10px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.vdot-table thead th {
+  background: #eef4fb;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+  height: 38px;
+  line-height: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+
+.vdot-table thead tr:nth-child(1) th {
+  top: 0;
+  z-index: 5;
+}
+
+.vdot-table thead tr:nth-child(2) th {
+  top: 38px;
+  z-index: 4;
+}
+
+.vdot-table thead tr:nth-child(1) th:first-child {
+  left: 0;
+  z-index: 6;
+}
+
+.vdot-table thead th[rowspan] {
+  height: 76px;
+}
+
+.vdot-table tbody th {
+  background: #f8fafc;
+  color: #1864ab;
+  font-weight: 900;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.vdot-table td {
+  color: #344054;
+}
+
+.vdot-table td strong {
+  color: #111827;
+  display: block;
+  font-size: 13px;
+}
+
+.vdot-table td span {
+  color: #667085;
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.vdot-table tr.highlighted-vdot-row th,
+.vdot-table tr.highlighted-vdot-row td {
+  background: #e7f5ff;
+  border-bottom-color: #a5d8ff;
+}
+
+.shoe-page {
+  display: grid;
+  gap: 16px;
+}
+
+.shoe-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto;
+}
+
+.shoe-preview {
+  aspect-ratio: 4 / 3;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  object-fit: cover;
+  width: 120px;
+}
+
+.shoe-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+}
+
+.shoe-card {
+  background: #ffffff;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(31, 41, 55, 0.07);
+  overflow: hidden;
+}
+
+.shoe-photo {
+  align-items: center;
+  aspect-ratio: 16 / 10;
+  background: linear-gradient(135deg, #e6f0fb, #f8fafc);
+  display: flex;
+  justify-content: center;
+}
+
+.shoe-photo img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.shoe-photo span {
+  color: #1864ab;
+  font-size: 34px;
+  font-weight: 900;
+}
+
+.shoe-card-body {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.shoe-card-heading {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.shoe-card-heading h3 {
+  color: #111827;
+  font-size: 20px;
+  margin: 0;
+}
+
+.shoe-mileage {
+  background: #f8fafc;
+  border: 1px solid #edf1f7;
+  border-radius: 8px;
+  color: #667085;
+  display: grid;
+  gap: 4px;
+  font-weight: 800;
+  padding: 12px;
+}
+
+.shoe-mileage span {
+  font-size: 13px;
+}
+
+.shoe-mileage strong {
+  color: #111827;
+  font-size: 22px;
+}
+
+.empty-shoes {
+  align-items: center;
+  background: #ffffff;
+  border: 1px dashed #b8c4d4;
+  border-radius: 8px;
+  color: #667085;
+  display: flex;
+  font-weight: 800;
+  min-height: 180px;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
 }
 
 .history-launch {
@@ -622,7 +946,7 @@ textarea {
 }
 
 .history-item {
-  align-items: center;
+  align-items: stretch;
   background: #f8fafc;
   border: 1px solid #edf1f7;
   border-radius: 8px;
@@ -632,13 +956,64 @@ textarea {
   padding: 10px;
 }
 
-.history-item div {
+.history-item-main {
   display: grid;
-  gap: 3px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.history-item span {
+.history-item-main > strong {
+  color: #111827;
+  font-size: 16px;
+}
+
+.history-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.history-stat {
+  background: #ffffff;
+  border: 1px solid #d9e2ef;
+  border-radius: 8px;
+  color: #344054;
+  display: grid;
+  gap: 2px;
+  min-width: 82px;
+  padding: 7px 9px;
+}
+
+.history-stat small {
   color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.history-stat b {
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.history-shoe {
+  color: #667085;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.weight-stat-row {
+  max-width: 160px;
+}
+
+.weight-stat {
+  border-color: #bfdbfe;
+  min-width: 120px;
+}
+
+.weight-stat b {
+  color: #1864ab;
+  font-size: 18px;
 }
 
 .record-item {
@@ -726,13 +1101,39 @@ textarea {
   .performance-grid,
   .weather-grid,
   .metric-grid,
-  .history-columns {
+  .history-columns,
+  .vdot-summary-grid,
+  .shoe-form {
     grid-template-columns: 1fr;
+  }
+
+  .view-tabs {
+    display: flex;
+    width: 100%;
+  }
+
+  .view-tabs button {
+    flex: 1;
   }
 
   .chart,
   .empty-chart {
-    height: 860px;
+    height: 1100px;
+  }
+
+  .chart-volume-tabs {
+    border-radius: 7px;
+    gap: 2px;
+    padding: 2px;
+    right: 8px;
+    top: 786px;
+  }
+
+  .chart-volume-tabs button {
+    border-radius: 5px;
+    font-size: 11px;
+    min-height: 26px;
+    padding: 4px 8px;
   }
 
   .target-input {

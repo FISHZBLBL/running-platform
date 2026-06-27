@@ -1,3 +1,5 @@
+import type { VdotModel } from "./vdot";
+
 export type Weather = {
   temperatureC: number | null;
   humidityPct: number | null;
@@ -16,6 +18,7 @@ export type RunSplit = {
 export type RunningRecord = {
   id: string;
   dateTime: string;
+  shoeId: string | null;
   distanceKm: number;
   durationSec: number;
   avgPaceSecPerKm: number;
@@ -23,6 +26,7 @@ export type RunningRecord = {
   avgCadenceSpm: number;
   avgHeartRateBpm: number;
   weather: Weather;
+  notes: string;
   splits: RunSplit[];
   screenshotKeys: string[];
   createdAt: string;
@@ -32,6 +36,15 @@ export type RunningRecord = {
 export type WeightRecord = {
   date: string;
   weightKg: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RunningShoe = {
+  id: string;
+  name: string;
+  photoKey: string | null;
+  photoUrl: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -71,6 +84,9 @@ export type PredictionResult = {
   predictedGoalFinishDate: string | null;
   predictedFinishSecAtTargetDate: number | null;
   distanceProjectionBasis: "achieved" | "long-run-progression" | "trend" | "insufficient";
+  vdotModel: VdotModel;
+  vdotPredictedFinishRangeSec: { fastest: number; conservative: number } | null;
+  requiredVdotForTargetFinish: number | null;
   warnings: string[];
   recommendations: string[];
 };
