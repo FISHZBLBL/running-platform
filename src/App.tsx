@@ -289,6 +289,13 @@ function groupHistoryByMonth(runs: RunningRecord[], weights: WeightRecord[]): Hi
     .sort((a, b) => b.month.localeCompare(a.month));
 }
 
+function shoePhotoSrc(shoe: RunningShoe): string {
+  if (shoe.photoKey?.startsWith("users/")) {
+    return `/api/shoe-photo?key=${encodeURIComponent(shoe.photoKey)}`;
+  }
+  return shoe.photoUrl ?? "";
+}
+
 function normalizeDurationToken(value: string): string {
   const parts = value.split(":");
   if (parts.length === 2 && parts[0].length === 3) {
@@ -1463,6 +1470,7 @@ function ShoeLibrary({
   const [name, setName] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState("");
+  const [editingShoe, setEditingShoe] = useState<RunningShoe | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -1475,6 +1483,13 @@ function ShoeLibrary({
     setPhotoPreview(preview);
     return () => URL.revokeObjectURL(preview);
   }, [photo]);
+
+  useEffect(() => {
+    if (!editingShoe) return;
+    setName(editingShoe.name);
+    setPhoto(null);
+    setMessage("");
+  }, [editingShoe]);
 
   const mileageByShoe = useMemo(() => {
     const totals = new Map<string, number>();
@@ -1496,25 +1511,38 @@ function ShoeLibrary({
     setMessage("");
     try {
       const now = new Date().toISOString();
-      const shoeId = createLocalId();
+      const shoeId = editingShoe?.id ?? createLocalId();
       const uploaded = photo ? await api.uploadShoePhoto(shoeId, photo) : { key: null, url: null };
-      await api.createShoe({
+      const shoe: RunningShoe = {
         id: shoeId,
         name: trimmedName,
-        photoKey: uploaded.key,
-        photoUrl: uploaded.url,
-        createdAt: now,
+        photoKey: uploaded.key ?? editingShoe?.photoKey ?? null,
+        photoUrl: uploaded.url ?? editingShoe?.photoUrl ?? null,
+        createdAt: editingShoe?.createdAt ?? now,
         updatedAt: now
-      });
+      };
+      if (editingShoe) {
+        await api.updateShoe(shoe);
+      } else {
+        await api.createShoe(shoe);
+      }
       setName("");
       setPhoto(null);
-      setMessage("跑鞋已添加。");
+      setEditingShoe(null);
+      setMessage(editingShoe ? "跑鞋已更新。" : "跑鞋已添加。");
       onChanged();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "添加跑鞋失败。");
+      setMessage(error instanceof Error ? error.message : "保存跑鞋失败。");
     } finally {
       setBusy(false);
     }
+  }
+
+  function cancelEdit() {
+    setEditingShoe(null);
+    setName("");
+    setPhoto(null);
+    setMessage("");
   }
 
   async function removeShoe(shoe: RunningShoe) {
@@ -1531,8 +1559,13 @@ function ShoeLibrary({
         <div className="panel-heading">
           <div>
             <p className="eyebrow">Shoe Library</p>
-            <h2>鞋库</h2>
+            <h2>{editingShoe ? "编辑跑鞋" : "鞋库"}</h2>
           </div>
+          {editingShoe && (
+            <button type="button" className="ghost-button" onClick={cancelEdit}>
+              取消编辑
+            </button>
+          )}
         </div>
         <form className="shoe-form" onSubmit={submit}>
           <label>
@@ -1543,9 +1576,11 @@ function ShoeLibrary({
             跑鞋照片
             <input type="file" accept="image/*" onChange={(event) => setPhoto(event.target.files?.[0] ?? null)} />
           </label>
-          {photoPreview && <img className="shoe-preview" src={photoPreview} alt="跑鞋照片预览" />}
+          {(photoPreview || (editingShoe && shoePhotoSrc(editingShoe))) && (
+            <img className="shoe-preview" src={photoPreview || shoePhotoSrc(editingShoe!)} alt="跑鞋照片预览" />
+          )}
           <button className="primary-button" disabled={busy}>
-            {busy ? "添加中..." : "添加跑鞋"}
+            {busy ? "保存中..." : editingShoe ? "保存修改" : "添加跑鞋"}
           </button>
           {message && <p className="form-message">{message}</p>}
         </form>
@@ -1554,10 +1589,11 @@ function ShoeLibrary({
       <section className="shoe-grid">
         {shoes.map((shoe) => {
           const usedKm = mileageByShoe.get(shoe.id) ?? 0;
+          const imageSrc = shoePhotoSrc(shoe);
           return (
             <article className="shoe-card" key={shoe.id}>
               <div className="shoe-photo">
-                {shoe.photoUrl ? <img src={shoe.photoUrl} alt={shoe.name} /> : <span>{shoe.name.slice(0, 2).toUpperCase()}</span>}
+                {imageSrc ? <img src={imageSrc} alt={shoe.name} /> : <span>{shoe.name.slice(0, 2).toUpperCase()}</span>}
               </div>
               <div className="shoe-card-body">
                 <div className="shoe-card-heading">
@@ -1565,9 +1601,14 @@ function ShoeLibrary({
                     <p className="eyebrow">Running Shoe</p>
                     <h3>{shoe.name}</h3>
                   </div>
-                  <button type="button" className="ghost-button small-button danger-button" onClick={() => removeShoe(shoe)}>
-                    删除
-                  </button>
+                  <div className="shoe-actions">
+                    <button type="button" className="ghost-button small-button" onClick={() => setEditingShoe(shoe)}>
+                      编辑
+                    </button>
+                    <button type="button" className="ghost-button small-button danger-button" onClick={() => removeShoe(shoe)}>
+                      删除
+                    </button>
+                  </div>
                 </div>
                 <div className="shoe-mileage">
                   <span>累计跑量</span>

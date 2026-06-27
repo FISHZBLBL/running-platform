@@ -823,6 +823,13 @@ textarea {
   margin: 0;
 }
 
+.shoe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .shoe-mileage {
   background: #f8fafc;
   border: 1px solid #edf1f7;

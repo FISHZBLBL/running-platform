@@ -11,6 +11,7 @@ export type StoredFile = {
 
 export interface StorageAdapter {
   getText(key: string): Promise<string | null>;
+  getFile(key: string): Promise<StoredFile | null>;
   putText(key: string, value: string): Promise<void>;
   putFile(key: string, file: StoredFile): Promise<void>;
   delete(key: string): Promise<void>;
@@ -37,6 +38,18 @@ class CosStorage implements StorageAdapter {
     }
     await this.assertOk(response, key);
     return response.text();
+  }
+
+  async getFile(key: string): Promise<StoredFile | null> {
+    const response = await this.request("GET", key);
+    if (response.status === 404) {
+      return null;
+    }
+    await this.assertOk(response, key);
+    return {
+      body: Buffer.from(await response.arrayBuffer()),
+      contentType: response.headers.get("content-type") ?? "application/octet-stream"
+    };
   }
 
   async putText(key: string, value: string): Promise<void> {
@@ -151,12 +164,32 @@ function decodeXml(value: string): string {
   return value.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }
 
+function contentTypeFromKey(key: string): string {
+  const extension = key.split(".").pop()?.toLowerCase();
+  if (extension === "png") return "image/png";
+  if (extension === "webp") return "image/webp";
+  if (extension === "gif") return "image/gif";
+  if (extension === "svg") return "image/svg+xml";
+  return "image/jpeg";
+}
+
 class LocalStorage implements StorageAdapter {
   private root = path.join(process.cwd(), ".netlify", "local-data");
 
   async getText(key: string): Promise<string | null> {
     try {
       return await readFile(this.resolve(key), "utf8");
+    } catch {
+      return null;
+    }
+  }
+
+  async getFile(key: string): Promise<StoredFile | null> {
+    try {
+      return {
+        body: await readFile(this.resolve(key)),
+        contentType: contentTypeFromKey(key)
+      };
     } catch {
       return null;
     }
