@@ -1745,36 +1745,54 @@ function HistoryManager({
                   <div>
                     <h3>跑步</h3>
                     <div className="history-items">
-                      {month.runs.map((run) => (
-                        <div className="history-item" key={run.id}>
-                          <div className="history-item-main">
-                            <strong>{run.dateTime.slice(0, 10)}</strong>
-                            <div className="history-stat-row">
-                              <span className="history-stat">
-                                <small>里程</small>
-                                <b>{run.distanceKm.toFixed(2)} km</b>
-                              </span>
-                              <span className="history-stat">
-                                <small>配速</small>
-                                <b>{formatPace(run.avgPaceSecPerKm)} /km</b>
-                              </span>
-                              <span className="history-stat">
-                                <small>用时</small>
-                                <b>{formatDuration(run.durationSec)}</b>
-                              </span>
+                      {month.runs.map((run) => {
+                        const shoeName = run.shoeId ? shoeNames.get(run.shoeId) ?? "已删除跑鞋" : "";
+                        return (
+                          <div className="history-item" key={run.id}>
+                            <div className="history-item-main">
+                              <div className="history-title-row">
+                                <strong>{run.dateTime.slice(0, 10)}</strong>
+                                <span className="history-badges">
+                                  {run.splits.length > 0 && (
+                                    <span className="history-badge split-badge" title={`${run.splits.length} 段`} aria-label={`${run.splits.length} 段`}>
+                                      <span className="badge-icon" aria-hidden="true">≡</span>
+                                      <span className="badge-check" aria-hidden="true">✓</span>
+                                    </span>
+                                  )}
+                                  {run.shoeId && (
+                                    <span className="history-badge shoe-badge" title={shoeName} aria-label={shoeName}>
+                                      <span className="badge-icon" aria-hidden="true">⌁</span>
+                                      <span className="badge-check" aria-hidden="true">✓</span>
+                                    </span>
+                                  )}
+                                </span>
+                              </div>
+                              <div className="history-stat-row">
+                                <span className="history-stat">
+                                  <small>里程</small>
+                                  <b>{run.distanceKm.toFixed(2)} km</b>
+                                </span>
+                                <span className="history-stat">
+                                  <small>配速</small>
+                                  <b>{formatPace(run.avgPaceSecPerKm)} /km</b>
+                                </span>
+                                <span className="history-stat">
+                                  <small>用时</small>
+                                  <b>{formatDuration(run.durationSec)}</b>
+                                </span>
+                              </div>
                             </div>
-                            {run.shoeId && <span className="history-shoe">跑鞋：{shoeNames.get(run.shoeId) ?? "已删除跑鞋"}</span>}
+                            <div className="record-actions">
+                              <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
+                                编辑
+                              </button>
+                              <button type="button" className="ghost-button small-button danger-button" onClick={() => onDeleteRun(run)}>
+                                删除
+                              </button>
+                            </div>
                           </div>
-                          <div className="record-actions">
-                            <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
-                              编辑
-                            </button>
-                            <button type="button" className="ghost-button small-button danger-button" onClick={() => onDeleteRun(run)}>
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                       {month.runs.length === 0 && <p className="muted-text">本月没有跑步记录。</p>}
                     </div>
                   </div>

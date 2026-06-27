@@ -974,6 +974,60 @@ textarea {
   font-size: 16px;
 }
 
+.history-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.history-title-row > strong {
+  color: #111827;
+  font-size: 16px;
+}
+
+.history-badges {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.history-badge {
+  align-items: center;
+  border: 1px solid #d9e2ef;
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 3px;
+  height: 24px;
+  justify-content: center;
+  min-width: 42px;
+  padding: 0 8px;
+}
+
+.badge-icon {
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.badge-check {
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.split-badge {
+  background: #eef7ff;
+  border-color: #bfdbfe;
+  color: #1864ab;
+}
+
+.shoe-badge {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #16803c;
+}
+
 .history-stat-row {
   display: flex;
   flex-wrap: wrap;
