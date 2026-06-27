@@ -111,6 +111,9 @@ class CosStorage implements StorageAdapter {
       method,
       headers,
       body: payload?.body ? new Uint8Array(payload.body) : undefined
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`服务器连接腾讯 COS 失败：${message}`);
     });
   }
 

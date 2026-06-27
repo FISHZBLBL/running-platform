@@ -1,7 +1,7 @@
 import type { Config } from "@netlify/functions";
 import { validateShoePayload } from "../../shared/validation";
 import { requireUsername } from "./_shared/auth";
-import { deleteShoe, getShoe, saveShoe } from "./_shared/data";
+import { deleteShoe, saveShoe } from "./_shared/data";
 import { errorResponse, json, methodNotAllowed, parseJson } from "./_shared/responses";
 
 export default async function shoeById(req: Request, context: { params?: { id?: string } }): Promise<Response> {
@@ -12,10 +12,9 @@ export default async function shoeById(req: Request, context: { params?: { id?: 
       return json({ error: "Shoe id is required." }, { status: 400 });
     }
     if (req.method === "PUT") {
-      const existing = await getShoe(username, shoeId);
       const body = await parseJson(req);
       const payload = typeof body === "object" && body !== null ? body : {};
-      const shoe = validateShoePayload({ ...payload, id: shoeId }, existing ?? undefined);
+      const shoe = validateShoePayload({ ...payload, id: shoeId });
       await saveShoe(username, shoe);
       return json({ shoe });
     }
