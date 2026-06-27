@@ -1005,9 +1005,35 @@ textarea {
 }
 
 .badge-icon {
+  align-items: center;
+  display: inline-flex;
   font-size: 15px;
   font-weight: 900;
+  height: 16px;
+  justify-content: center;
   line-height: 1;
+  width: 22px;
+}
+
+.badge-svg {
+  display: block;
+  fill: none;
+  height: 17px;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+  width: 22px;
+}
+
+.badge-svg circle {
+  fill: currentColor;
+  stroke: none;
+}
+
+.shoe-svg {
+  height: 18px;
+  width: 24px;
 }
 
 .badge-check {
@@ -1016,16 +1042,22 @@ textarea {
   line-height: 1;
 }
 
-.split-badge {
+.history-badge.present.split-badge {
   background: #eef7ff;
   border-color: #bfdbfe;
   color: #1864ab;
 }
 
-.shoe-badge {
+.history-badge.present.shoe-badge {
   background: #f0fdf4;
   border-color: #bbf7d0;
   color: #16803c;
+}
+
+.history-badge.missing {
+  background: #fff5f5;
+  border-color: #ffb4b4;
+  color: #c92a2a;
 }
 
 .history-stat-row {

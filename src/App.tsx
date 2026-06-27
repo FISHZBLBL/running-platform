@@ -296,6 +296,50 @@ function shoePhotoSrc(shoe: RunningShoe): string {
   return shoe.photoUrl ?? "";
 }
 
+function SplitBadgeIcon() {
+  return (
+    <svg className="badge-svg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 6h10M7 12h10M7 18h10" />
+      <circle cx="4" cy="6" r="1" />
+      <circle cx="4" cy="12" r="1" />
+      <circle cx="4" cy="18" r="1" />
+    </svg>
+  );
+}
+
+function ShoeBadgeIcon() {
+  return (
+    <svg className="badge-svg shoe-svg" viewBox="0 0 32 24" aria-hidden="true">
+      <path d="M4 15.5c3.6 1.2 7.1 1.7 10.5 1.4 1.5-.1 2.6-1 3.2-2.4l.5-1.1c2.4 2.2 5 3.5 7.8 4 .9.2 1.5.9 1.4 1.8-.1.8-.8 1.4-1.7 1.4H6.2c-1.7 0-3.2-1-3.8-2.6-.4-1 .5-2.1 1.6-1.7Z" />
+      <path d="M8.4 8.4c1.5 1.8 3.2 3 5.2 3.7" />
+      <path d="M22.8 15.5c.8-1.1 1.1-2.2 1-3.4" />
+    </svg>
+  );
+}
+
+function HistoryDataBadge({
+  present,
+  title,
+  children,
+  className
+}: {
+  present: boolean;
+  title: string;
+  children: ReactNode;
+  className: string;
+}) {
+  return (
+    <span
+      className={`history-badge ${className} ${present ? "present" : "missing"}`}
+      title={title}
+      aria-label={title}
+    >
+      <span className="badge-icon" aria-hidden="true">{children}</span>
+      <span className="badge-check" aria-hidden="true">{present ? "✓" : "×"}</span>
+    </span>
+  );
+}
+
 function normalizeDurationToken(value: string): string {
   const parts = value.split(":");
   if (parts.length === 2 && parts[0].length === 3) {
@@ -1746,25 +1790,25 @@ function HistoryManager({
                     <h3>跑步</h3>
                     <div className="history-items">
                       {month.runs.map((run) => {
-                        const shoeName = run.shoeId ? shoeNames.get(run.shoeId) ?? "已删除跑鞋" : "";
+                        const hasSplits = run.splits.length > 0;
+                        const hasShoe = Boolean(run.shoeId);
+                        const shoeName = run.shoeId ? shoeNames.get(run.shoeId) ?? "已删除跑鞋" : "未关联跑鞋";
                         return (
                           <div className="history-item" key={run.id}>
                             <div className="history-item-main">
                               <div className="history-title-row">
                                 <strong>{run.dateTime.slice(0, 10)}</strong>
                                 <span className="history-badges">
-                                  {run.splits.length > 0 && (
-                                    <span className="history-badge split-badge" title={`${run.splits.length} 段`} aria-label={`${run.splits.length} 段`}>
-                                      <span className="badge-icon" aria-hidden="true">≡</span>
-                                      <span className="badge-check" aria-hidden="true">✓</span>
-                                    </span>
-                                  )}
-                                  {run.shoeId && (
-                                    <span className="history-badge shoe-badge" title={shoeName} aria-label={shoeName}>
-                                      <span className="badge-icon" aria-hidden="true">⌁</span>
-                                      <span className="badge-check" aria-hidden="true">✓</span>
-                                    </span>
-                                  )}
+                                  <HistoryDataBadge
+                                    present={hasSplits}
+                                    title={hasSplits ? `${run.splits.length} 段` : "未录入分段"}
+                                    className="split-badge"
+                                  >
+                                    <SplitBadgeIcon />
+                                  </HistoryDataBadge>
+                                  <HistoryDataBadge present={hasShoe} title={shoeName} className="shoe-badge">
+                                    <ShoeBadgeIcon />
+                                  </HistoryDataBadge>
                                 </span>
                               </div>
                               <div className="history-stat-row">
