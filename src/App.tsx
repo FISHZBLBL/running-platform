@@ -794,6 +794,8 @@ function chartTooltipFormatter(params: unknown) {
       formatted = `${formatPace(Number(value))} /km`;
     } else if (name.includes("心率")) {
       formatted = `${Number(value).toFixed(0)} bpm`;
+    } else if (name.includes("体重")) {
+      formatted = `${Number(value).toFixed(1)} kg`;
     } else if (name.includes("距离") || name.includes("跑量") || name.includes("最长单次")) {
       formatted = `${Number(value).toFixed(2)} km`;
     } else {
@@ -807,6 +809,7 @@ function chartTooltipFormatter(params: unknown) {
 function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [volumeMode, setVolumeMode] = useState<VolumeChartMode>("weekly");
+  const chartMinWidth = Math.max(760, runs.length * 44, weights.length * 34);
 
   useEffect(() => {
     if (!ref.current) return;
@@ -819,12 +822,15 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     const heartRates = sorted.map((run) => run.avgHeartRateBpm);
     const monthly = monthlyMileage(sorted);
     const weekly = weeklyMileage(sorted);
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    const weightDates = sortedWeights.map((weight) => weight.date);
+    const weightValues = sortedWeights.map((weight) => weight.weightKg);
     const volumeData = volumeMode === "weekly" ? weekly : monthly;
     const volumeLabels = volumeData.map((item) => ("week" in item ? item.week : item.month));
     const volumeLabel = volumeMode === "weekly" ? "周跑量" : "月跑量";
     const volumeLongestLabel = volumeMode === "weekly" ? "周内最长单次" : "月内最长单次";
     const paceRange = paceAxis(paces);
-    const weightRange = valueAxis(weights.map((weight) => weight.weightKg), { min: 65, max: 105 }, 2, 12);
+    const weightRange = valueAxis(weightValues, { min: 65, max: 105 }, 2, 12);
     const distanceRange = valueAxis(distances, { min: 0, max: 15 }, 2, 6);
     const heartRateRange = valueAxis(heartRates, { min: 120, max: 180 }, 5, 20);
     const volumeDistanceRange = valueAxis(
@@ -866,13 +872,15 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
         { top: 8, left: 16, data: ["实际配速", "3次移动平均", "单次距离", "平均心率"] },
         { top: 342, left: 16, data: ["体重-配速", "体重-心率"] },
         { top: 572, left: 16, data: ["配速-心率", "心率拟合"] },
-        { top: 814, left: 16, data: [volumeLabel, volumeLongestLabel] }
+        { top: 814, left: 16, data: [volumeLabel, volumeLongestLabel] },
+        { top: 1084, left: 16, data: ["体重"] }
       ],
       grid: [
-        { top: 72, left: 64, right: 112, height: 235, containLabel: true },
+        { top: 72, left: 64, right: 126, height: 250, containLabel: true },
         { top: 398, left: 64, right: 80, height: 135, containLabel: true },
         { top: 628, left: 64, right: 64, height: 135, containLabel: true },
-        { top: 872, left: 64, right: 64, height: 166, containLabel: true }
+        { top: 872, left: 64, right: 64, height: 166, containLabel: true },
+        { top: 1142, left: 64, right: 64, height: 150, containLabel: true }
       ],
       xAxis: [
         { type: "category", data: dates, boundaryGap: false, gridIndex: 0, nameGap: 24 },
@@ -897,7 +905,8 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           axisLabel: { formatter: (value: number) => formatPace(value) },
           splitLine: { lineStyle: { type: "dashed" } }
         },
-        { type: "category", data: volumeLabels, gridIndex: 3, nameGap: 24 }
+        { type: "category", data: volumeLabels, gridIndex: 3, nameGap: 24 },
+        { type: "category", data: weightDates, boundaryGap: false, gridIndex: 4, nameGap: 24 }
       ],
       yAxis: [
         {
@@ -970,6 +979,15 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           gridIndex: 3,
           min: volumeDistanceRange.min,
           max: volumeDistanceRange.max
+        },
+        {
+          type: "value",
+          name: "体重 kg",
+          nameLocation: "middle",
+          nameGap: 46,
+          gridIndex: 4,
+          min: weightRange.min,
+          max: weightRange.max
         }
       ],
       series: [
@@ -1026,6 +1044,15 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           data: volumeData.map((item) => Number(item.longestDistanceKm.toFixed(1))),
           smooth: true,
           symbolSize: 8
+        },
+        {
+          name: "体重",
+          type: "line",
+          xAxisIndex: 4,
+          yAxisIndex: 7,
+          data: weightValues,
+          smooth: true,
+          symbolSize: 8
         }
       ]
     });
@@ -1047,7 +1074,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
           月跑量
         </button>
       </div>
-      <div className="chart" ref={ref} />
+      <div className="chart" ref={ref} style={{ minWidth: chartMinWidth }} />
     </div>
   );
 }
@@ -2080,7 +2107,11 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
                   {targetError && <p className="target-error">{targetError}</p>}
                 </form>
               </div>
-              {runs.length ? <ResearchChart runs={runs} weights={weights} /> : <div className="empty-chart">保存跑步记录后显示趋势图。</div>}
+              {runs.length || weights.length ? (
+                <ResearchChart runs={runs} weights={weights} />
+              ) : (
+                <div className="empty-chart">保存跑步或体重记录后显示趋势图。</div>
+              )}
             </div>
             <PredictionPanel prediction={prediction} mode={appliedPredictionMode} />
           </section>

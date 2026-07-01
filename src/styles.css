@@ -269,11 +269,13 @@ textarea {
 }
 
 .chart {
-  height: 1100px;
+  height: 1350px;
   width: 100%;
 }
 
 .research-chart {
+  overflow-x: auto;
+  overflow-y: hidden;
   position: relative;
 }
 
@@ -315,7 +317,7 @@ textarea {
   color: #667085;
   display: flex;
   font-weight: 700;
-  height: 1100px;
+  height: 1350px;
   justify-content: center;
   text-align: center;
 }
@@ -1211,7 +1213,11 @@ textarea {
 
   .chart,
   .empty-chart {
-    height: 1100px;
+    height: 1350px;
+  }
+
+  .chart {
+    min-width: 760px;
   }
 
   .chart-volume-tabs {
@@ -1236,5 +1242,45 @@ textarea {
   .target-controls {
     grid-template-columns: 1fr;
     max-width: none;
+  }
+
+  .history-columns {
+    gap: 14px;
+    grid-template-columns: minmax(430px, 1.35fr) minmax(220px, 0.65fr);
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+
+  .history-item {
+    display: grid;
+    gap: 10px;
+  }
+
+  .history-item-main {
+    width: 100%;
+  }
+
+  .history-stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .weight-stat-row {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: none;
+  }
+
+  .history-stat {
+    min-width: 0;
+  }
+
+  .record-actions {
+    grid-template-columns: 1fr 1fr;
+    justify-items: stretch;
+    width: 100%;
+  }
+
+  .record-actions .small-button {
+    min-height: 42px;
   }
 }
