@@ -1198,13 +1198,17 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
       tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
       legend: {
         top: 8,
-        left: 12,
-        type: isNarrow ? "scroll" : "plain",
-        itemGap: isNarrow ? 8 : 12,
+        left: isNarrow ? 4 : 12,
+        right: isNarrow ? 4 : undefined,
+        type: "plain",
+        itemGap: isNarrow ? 5 : 12,
+        itemWidth: isNarrow ? 18 : 25,
+        itemHeight: isNarrow ? 10 : 14,
+        textStyle: { fontSize: isNarrow ? 11 : 12 },
         data: ["实际配速", "3次移动平均", "单次距离", "平均心率"]
       },
       grid: isNarrow
-        ? { top: 86, left: 42, right: 38, bottom: 58, containLabel: true }
+        ? { top: 112, left: 42, right: 38, bottom: 58, containLabel: true }
         : { top: 70, left: 62, right: 126, bottom: 58, containLabel: true },
       dataZoom: xAxisZoom(dates.length, 8),
       xAxis: { type: "category", data: dates, boundaryGap: false },

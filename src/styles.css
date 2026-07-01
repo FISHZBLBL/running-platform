@@ -103,6 +103,7 @@ label {
   gap: 7px;
   font-size: 13px;
   font-weight: 700;
+  min-width: 0;
 }
 
 input,
@@ -112,7 +113,9 @@ textarea {
   border: 1px solid #cfd8e5;
   border-radius: 10px;
   color: #111827;
+  max-width: 100%;
   min-height: 42px;
+  min-width: 0;
   outline: none;
   padding: 10px 12px;
   width: 100%;
@@ -1255,6 +1258,18 @@ textarea {
     font-size: 11px;
     min-height: 26px;
     padding: 4px 8px;
+  }
+
+  input[type="date"],
+  input[type="datetime-local"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    font-size: 16px;
+    max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    text-align: left;
   }
 
   .target-input {
