@@ -1087,7 +1087,7 @@ function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["data
       xAxisIndex: 0,
       start,
       end: 100,
-      filterMode: "none",
+      filterMode: "filter",
       moveOnMouseMove: true,
       moveOnMouseWheel: true,
       zoomOnMouseWheel: false
@@ -1099,7 +1099,7 @@ function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["data
       end: 100,
       bottom: 8,
       height: 18,
-      filterMode: "none",
+      filterMode: "filter",
       showDataShadow: false
     }
   ];
@@ -1112,7 +1112,7 @@ function xValueZoom(): echarts.EChartsOption["dataZoom"] {
       xAxisIndex: 0,
       start: 0,
       end: 100,
-      filterMode: "none",
+      filterMode: "filter",
       moveOnMouseMove: true,
       moveOnMouseWheel: true,
       zoomOnMouseWheel: false
@@ -1124,7 +1124,7 @@ function xValueZoom(): echarts.EChartsOption["dataZoom"] {
       end: 100,
       bottom: 8,
       height: 18,
-      filterMode: "none",
+      filterMode: "filter",
       showDataShadow: false
     }
   ];
@@ -1199,10 +1199,10 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
         }
       ],
       series: [
-        { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
-        { name: "3次移动平均", type: "line", data: paceAverage, smooth: true, lineStyle: { type: "dashed", width: 2 }, symbol: "none" },
-        { name: "单次距离", type: "bar", yAxisIndex: 1, data: distances, barMaxWidth: 20, opacity: 0.42 },
-        { name: "平均心率", type: "line", yAxisIndex: 2, data: heartRates, smooth: true, symbolSize: 7 }
+        { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8, clip: true },
+        { name: "3次移动平均", type: "line", data: paceAverage, smooth: true, lineStyle: { type: "dashed", width: 2 }, symbol: "none", clip: true },
+        { name: "单次距离", type: "bar", yAxisIndex: 1, data: distances, barMaxWidth: 20, opacity: 0.42, clip: true },
+        { name: "平均心率", type: "line", yAxisIndex: 2, data: heartRates, smooth: true, symbolSize: 7, clip: true }
       ]
     };
   }, [runs]);
@@ -1279,14 +1279,16 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
           name: "体重-配速",
           type: "scatter",
           data: weightPaceScatter,
-          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5)),
+          clip: true
         },
         {
           name: "体重-心率",
           type: "scatter",
           yAxisIndex: 1,
           data: weightHeartRateScatter,
-          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5)),
+          clip: true
         }
       ]
     };
@@ -1348,14 +1350,16 @@ function PaceHeartChart({ runs }: { runs: RunningRecord[] }) {
           name: "配速-心率",
           type: "scatter",
           data: paceHeartScatter,
-          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5)),
+          clip: true
         },
         {
           name: "心率拟合",
           type: "line",
           data: paceHeartLine,
           symbol: "none",
-          lineStyle: { type: "dashed", width: 2 }
+          lineStyle: { type: "dashed", width: 2 },
+          clip: true
         }
       ]
     };
@@ -1406,14 +1410,16 @@ function VolumeChart({ runs }: { runs: RunningRecord[] }) {
           name: volumeLabel,
           type: "bar",
           data: volumeData.map((item) => Number(item.distanceKm.toFixed(1))),
-          barMaxWidth: 28
+          barMaxWidth: 28,
+          clip: true
         },
         {
           name: volumeLongestLabel,
           type: "line",
           data: volumeData.map((item) => Number(item.longestDistanceKm.toFixed(1))),
           smooth: true,
-          symbolSize: 8
+          symbolSize: 8,
+          clip: true
         }
       ]
     };
@@ -1459,7 +1465,7 @@ function WeightTrendChart({ weights }: { weights: WeightRecord[] }) {
         min: weightRange.min,
         max: weightRange.max
       },
-      series: [{ name: "体重", type: "line", data: weightValues, smooth: true, symbolSize: 8 }]
+      series: [{ name: "体重", type: "line", data: weightValues, smooth: true, symbolSize: 8, clip: true }]
     };
   }, [weights]);
 
