@@ -269,14 +269,43 @@ textarea {
 }
 
 .chart {
-  height: 1350px;
+  height: 340px;
   width: 100%;
 }
 
 .research-chart {
-  overflow-x: auto;
-  overflow-y: hidden;
+  display: grid;
+  gap: 18px;
   position: relative;
+}
+
+.chart-block {
+  border-top: 1px solid #edf1f7;
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.chart-block:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.chart-block h3 {
+  color: #344054;
+  font-size: 15px;
+  margin: 0;
+}
+
+.chart-block-heading {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.run-trend-chart {
+  height: 390px;
 }
 
 .chart-volume-tabs {
@@ -286,10 +315,6 @@ textarea {
   display: inline-flex;
   gap: 4px;
   padding: 4px;
-  position: absolute;
-  right: 18px;
-  top: 792px;
-  z-index: 2;
 }
 
 .chart-volume-tabs button {
@@ -317,7 +342,7 @@ textarea {
   color: #667085;
   display: flex;
   font-weight: 700;
-  height: 1350px;
+  height: 360px;
   justify-content: center;
   text-align: center;
 }
@@ -1213,19 +1238,16 @@ textarea {
 
   .chart,
   .empty-chart {
-    height: 1350px;
+    height: 330px;
   }
 
-  .chart {
-    min-width: 760px;
+  .run-trend-chart {
+    height: 420px;
   }
 
-  .chart-volume-tabs {
-    border-radius: 7px;
-    gap: 2px;
-    padding: 2px;
-    right: 8px;
-    top: 786px;
+  .chart-block-heading {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .chart-volume-tabs button {

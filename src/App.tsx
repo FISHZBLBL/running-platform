@@ -1079,6 +1079,410 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
   );
 }
 
+function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["dataZoom"] {
+  const start = count > visibleCount ? Math.max(0, ((count - visibleCount) / count) * 100) : 0;
+  return [
+    {
+      type: "inside",
+      xAxisIndex: 0,
+      start,
+      end: 100,
+      filterMode: "none",
+      moveOnMouseMove: true,
+      moveOnMouseWheel: true,
+      zoomOnMouseWheel: false
+    },
+    {
+      type: "slider",
+      xAxisIndex: 0,
+      start,
+      end: 100,
+      bottom: 8,
+      height: 18,
+      filterMode: "none",
+      showDataShadow: false
+    }
+  ];
+}
+
+function xValueZoom(): echarts.EChartsOption["dataZoom"] {
+  return [
+    {
+      type: "inside",
+      xAxisIndex: 0,
+      start: 0,
+      end: 100,
+      filterMode: "none",
+      moveOnMouseMove: true,
+      moveOnMouseWheel: true,
+      zoomOnMouseWheel: false
+    },
+    {
+      type: "slider",
+      xAxisIndex: 0,
+      start: 0,
+      end: 100,
+      bottom: 8,
+      height: 18,
+      filterMode: "none",
+      showDataShadow: false
+    }
+  ];
+}
+
+function ChartCanvas({ option, className = "" }: { option: echarts.EChartsOption; className?: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    const chart = echarts.init(ref.current);
+    chart.setOption(option, true);
+    const resize = () => chart.resize();
+    window.addEventListener("resize", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      chart.dispose();
+    };
+  }, [option]);
+
+  return <div className={`chart ${className}`} ref={ref} />;
+}
+
+function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
+  const option = useMemo<echarts.EChartsOption>(() => {
+    const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const dates = sorted.map((run) => run.dateTime.slice(0, 10));
+    const paces = sorted.map((run) => run.avgPaceSecPerKm);
+    const paceAverage = movingAverage(paces);
+    const distances = sorted.map((run) => run.distanceKm);
+    const heartRates = sorted.map((run) => run.avgHeartRateBpm);
+    const paceRange = paceAxis(paces);
+    const distanceRange = valueAxis(distances, { min: 0, max: 15 }, 2, 6);
+    const heartRateRange = valueAxis(heartRates, { min: 120, max: 180 }, 5, 20);
+
+    return {
+      color: ["#1864ab", "#2b8a3e", "#c92a2a", "#f08c00"],
+      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      legend: { top: 8, left: 12, data: ["实际配速", "3次移动平均", "单次距离", "平均心率"] },
+      grid: { top: 70, left: 62, right: 126, bottom: 58, containLabel: true },
+      dataZoom: xAxisZoom(dates.length, 8),
+      xAxis: { type: "category", data: dates, boundaryGap: false },
+      yAxis: [
+        {
+          type: "value",
+          name: "配速 /km",
+          nameLocation: "middle",
+          nameGap: 46,
+          inverse: true,
+          min: paceRange.min,
+          max: paceRange.max,
+          axisLabel: { formatter: (value: number) => formatPace(value) }
+        },
+        {
+          type: "value",
+          name: "距离 km",
+          nameLocation: "middle",
+          nameGap: 46,
+          position: "right",
+          min: distanceRange.min,
+          max: distanceRange.max
+        },
+        {
+          type: "value",
+          name: "心率 bpm",
+          nameLocation: "middle",
+          nameGap: 48,
+          position: "right",
+          offset: 52,
+          min: heartRateRange.min,
+          max: heartRateRange.max
+        }
+      ],
+      series: [
+        { name: "实际配速", type: "line", data: paces, smooth: true, symbolSize: 8 },
+        { name: "3次移动平均", type: "line", data: paceAverage, smooth: true, lineStyle: { type: "dashed", width: 2 }, symbol: "none" },
+        { name: "单次距离", type: "bar", yAxisIndex: 1, data: distances, barMaxWidth: 20, opacity: 0.42 },
+        { name: "平均心率", type: "line", yAxisIndex: 2, data: heartRates, smooth: true, symbolSize: 7 }
+      ]
+    };
+  }, [runs]);
+
+  return (
+    <div className="chart-block">
+      <h3>跑步表现趋势</h3>
+      <ChartCanvas option={option} className="run-trend-chart" />
+    </div>
+  );
+}
+
+function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
+  const option = useMemo<echarts.EChartsOption>(() => {
+    const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const paces = sorted.map((run) => run.avgPaceSecPerKm);
+    const heartRates = sorted.map((run) => run.avgHeartRateBpm);
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    const weightValues = sortedWeights.map((weight) => weight.weightKg);
+    const paceRange = paceAxis(paces);
+    const weightRange = valueAxis(weightValues, { min: 65, max: 105 }, 2, 12);
+    const heartRateRange = valueAxis(heartRates, { min: 120, max: 180 }, 5, 20);
+    const weightPaceScatter = sorted
+      .map((run) => {
+        const weight = nearestWeight(run, weights);
+        return weight ? [weight.weightKg, run.avgPaceSecPerKm, run.distanceKm] : null;
+      })
+      .filter(Boolean);
+    const weightHeartRateScatter = sorted
+      .map((run) => {
+        const weight = nearestWeight(run, weights);
+        return weight ? [weight.weightKg, run.avgHeartRateBpm, run.distanceKm] : null;
+      })
+      .filter(Boolean);
+
+    return {
+      color: ["#d59b3a", "#7048e8"],
+      tooltip: { formatter: chartTooltipFormatter },
+      legend: { top: 8, left: 12, data: ["体重-配速", "体重-心率"] },
+      grid: { top: 64, left: 62, right: 86, bottom: 58, containLabel: true },
+      dataZoom: xValueZoom(),
+      xAxis: {
+        type: "value",
+        name: "体重 kg",
+        nameLocation: "middle",
+        nameGap: 32,
+        min: weightRange.min,
+        max: weightRange.max,
+        splitLine: { lineStyle: { type: "dashed" } }
+      },
+      yAxis: [
+        {
+          type: "value",
+          name: "配速 /km",
+          nameLocation: "middle",
+          nameGap: 46,
+          inverse: true,
+          min: paceRange.min,
+          max: paceRange.max,
+          axisLabel: { formatter: (value: number) => formatPace(value) }
+        },
+        {
+          type: "value",
+          name: "心率 bpm",
+          nameLocation: "middle",
+          nameGap: 48,
+          position: "right",
+          min: heartRateRange.min,
+          max: heartRateRange.max
+        }
+      ],
+      series: [
+        {
+          name: "体重-配速",
+          type: "scatter",
+          data: weightPaceScatter,
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+        },
+        {
+          name: "体重-心率",
+          type: "scatter",
+          yAxisIndex: 1,
+          data: weightHeartRateScatter,
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+        }
+      ]
+    };
+  }, [runs, weights]);
+
+  return (
+    <div className="chart-block">
+      <h3>体重与跑步表现</h3>
+      <ChartCanvas option={option} className="relation-chart" />
+    </div>
+  );
+}
+
+function PaceHeartChart({ runs }: { runs: RunningRecord[] }) {
+  const option = useMemo<echarts.EChartsOption>(() => {
+    const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const paces = sorted.map((run) => run.avgPaceSecPerKm);
+    const heartRates = sorted.map((run) => run.avgHeartRateBpm);
+    const paceRange = paceAxis(paces);
+    const heartRateRange = valueAxis(heartRates, { min: 120, max: 180 }, 5, 20);
+    const paceHeartScatter = sorted
+      .map((run) => {
+        if (!Number.isFinite(run.avgPaceSecPerKm) || !Number.isFinite(run.avgHeartRateBpm)) return null;
+        return [run.avgPaceSecPerKm, run.avgHeartRateBpm, run.distanceKm, run.dateTime.slice(0, 10)];
+      })
+      .filter((item): item is [number, number, number, string] => Boolean(item));
+    const paceHeartLine = simpleRegressionLine(
+      paceHeartScatter.map(([pace, heartRate]) => [pace, heartRate]),
+      0,
+      1
+    );
+
+    return {
+      color: ["#1864ab", "#2b8a3e"],
+      tooltip: { formatter: chartTooltipFormatter },
+      legend: { top: 8, left: 12, data: ["配速-心率", "心率拟合"] },
+      grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
+      dataZoom: xValueZoom(),
+      xAxis: {
+        type: "value",
+        name: "配速 /km",
+        nameLocation: "middle",
+        nameGap: 32,
+        min: paceRange.min,
+        max: paceRange.max,
+        axisLabel: { formatter: (value: number) => formatPace(value) },
+        splitLine: { lineStyle: { type: "dashed" } }
+      },
+      yAxis: {
+        type: "value",
+        name: "心率 bpm",
+        nameLocation: "middle",
+        nameGap: 46,
+        min: heartRateRange.min,
+        max: heartRateRange.max
+      },
+      series: [
+        {
+          name: "配速-心率",
+          type: "scatter",
+          data: paceHeartScatter,
+          symbolSize: (value: number[]) => Math.max(8, Math.min(24, value[2] * 1.5))
+        },
+        {
+          name: "心率拟合",
+          type: "line",
+          data: paceHeartLine,
+          symbol: "none",
+          lineStyle: { type: "dashed", width: 2 }
+        }
+      ]
+    };
+  }, [runs]);
+
+  return (
+    <div className="chart-block">
+      <h3>配速与心率</h3>
+      <ChartCanvas option={option} className="scatter-chart" />
+    </div>
+  );
+}
+
+function VolumeChart({ runs }: { runs: RunningRecord[] }) {
+  const [volumeMode, setVolumeMode] = useState<VolumeChartMode>("weekly");
+  const option = useMemo<echarts.EChartsOption>(() => {
+    const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+    const monthly = monthlyMileage(sorted);
+    const weekly = weeklyMileage(sorted);
+    const volumeData = volumeMode === "weekly" ? weekly : monthly;
+    const volumeLabels = volumeData.map((item) => ("week" in item ? item.week : item.month));
+    const volumeLabel = volumeMode === "weekly" ? "周跑量" : "月跑量";
+    const volumeLongestLabel = volumeMode === "weekly" ? "周内最长单次" : "月内最长单次";
+    const volumeDistanceRange = valueAxis(
+      [...volumeData.map((item) => item.distanceKm), ...volumeData.map((item) => item.longestDistanceKm)],
+      volumeMode === "weekly" ? { min: 0, max: 40 } : { min: 0, max: 80 },
+      volumeMode === "weekly" ? 5 : 10,
+      volumeMode === "weekly" ? 20 : 30
+    );
+
+    return {
+      color: ["#0f766e", "#1864ab"],
+      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      legend: { top: 8, left: 12, data: [volumeLabel, volumeLongestLabel] },
+      grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
+      dataZoom: xAxisZoom(volumeLabels.length, 6),
+      xAxis: { type: "category", data: volumeLabels },
+      yAxis: {
+        type: "value",
+        name: `${volumeLabel} km`,
+        nameLocation: "middle",
+        nameGap: 44,
+        min: volumeDistanceRange.min,
+        max: volumeDistanceRange.max
+      },
+      series: [
+        {
+          name: volumeLabel,
+          type: "bar",
+          data: volumeData.map((item) => Number(item.distanceKm.toFixed(1))),
+          barMaxWidth: 28
+        },
+        {
+          name: volumeLongestLabel,
+          type: "line",
+          data: volumeData.map((item) => Number(item.longestDistanceKm.toFixed(1))),
+          smooth: true,
+          symbolSize: 8
+        }
+      ]
+    };
+  }, [runs, volumeMode]);
+
+  return (
+    <div className="chart-block volume-chart-block">
+      <div className="chart-block-heading">
+        <h3>{volumeMode === "weekly" ? "周跑量" : "月跑量"}</h3>
+        <div className="chart-volume-tabs" aria-label="跑量图切换">
+          <button type="button" className={volumeMode === "weekly" ? "active" : ""} onClick={() => setVolumeMode("weekly")}>
+            周跑量
+          </button>
+          <button type="button" className={volumeMode === "monthly" ? "active" : ""} onClick={() => setVolumeMode("monthly")}>
+            月跑量
+          </button>
+        </div>
+      </div>
+      <ChartCanvas option={option} className="volume-chart" />
+    </div>
+  );
+}
+
+function WeightTrendChart({ weights }: { weights: WeightRecord[] }) {
+  const option = useMemo<echarts.EChartsOption>(() => {
+    const sortedWeights = [...weights].sort((a, b) => a.date.localeCompare(b.date));
+    const weightDates = sortedWeights.map((weight) => weight.date);
+    const weightValues = sortedWeights.map((weight) => weight.weightKg);
+    const weightRange = valueAxis(weightValues, { min: 65, max: 105 }, 2, 12);
+
+    return {
+      color: ["#1864ab"],
+      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      legend: { top: 8, left: 12, data: ["体重"] },
+      grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
+      dataZoom: xAxisZoom(weightDates.length, 10),
+      xAxis: { type: "category", data: weightDates, boundaryGap: false },
+      yAxis: {
+        type: "value",
+        name: "体重 kg",
+        nameLocation: "middle",
+        nameGap: 46,
+        min: weightRange.min,
+        max: weightRange.max
+      },
+      series: [{ name: "体重", type: "line", data: weightValues, smooth: true, symbolSize: 8 }]
+    };
+  }, [weights]);
+
+  return (
+    <div className="chart-block">
+      <h3>体重趋势</h3>
+      <ChartCanvas option={option} className="weight-trend-chart" />
+    </div>
+  );
+}
+
+function IndependentResearchCharts({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
+  return (
+    <div className="research-chart">
+      {runs.length > 0 && <RunTrendChart runs={runs} />}
+      {runs.length > 0 && weights.length > 0 && <WeightRelationChart runs={runs} weights={weights} />}
+      {runs.length > 0 && <PaceHeartChart runs={runs} />}
+      {runs.length > 0 && <VolumeChart runs={runs} />}
+      {weights.length > 0 && <WeightTrendChart weights={weights} />}
+    </div>
+  );
+}
+
 function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | null; mode: PredictionMode }) {
   if (!prediction) {
     return <div className="panel muted-panel">等待预测数据...</div>;
@@ -2108,7 +2512,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
                 </form>
               </div>
               {runs.length || weights.length ? (
-                <ResearchChart runs={runs} weights={weights} />
+                <IndependentResearchCharts runs={runs} weights={weights} />
               ) : (
                 <div className="empty-chart">保存跑步或体重记录后显示趋势图。</div>
               )}
