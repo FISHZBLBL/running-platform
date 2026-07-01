@@ -1,6 +1,7 @@
 import * as echarts from "echarts";
 import { Component, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { buildPrediction } from "@shared/predictions";
 import type { PredictionResult, PublicUser, RunningRecord, RunningShoe, RunSplit, WeightRecord } from "@shared/types";
 import { TRAINING_PACE_LABELS, VDOT_DISTANCES, buildVdotModel } from "@shared/vdot";
 
@@ -214,6 +215,18 @@ function formatDuration(seconds: number): string {
 function formatKm(value: number): string {
   if (!Number.isFinite(value)) return "0.0";
   return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+}
+
+function sortRuns(records: RunningRecord[]): RunningRecord[] {
+  return [...records].sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime());
+}
+
+function sortShoes(records: RunningShoe[]): RunningShoe[] {
+  return [...records].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortWeights(records: WeightRecord[]): WeightRecord[] {
+  return [...records].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function isCompleteDecimalInput(value: string): boolean {
@@ -1148,7 +1161,27 @@ function ChartCanvas({ option, className = "" }: { option: echarts.EChartsOption
   return <div className={`chart ${className}`} ref={ref} />;
 }
 
+function useNarrowViewport() {
+  const [isNarrow, setIsNarrow] = useState(() => (typeof window === "undefined" ? false : window.matchMedia("(max-width: 720px)").matches));
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const media = window.matchMedia("(max-width: 720px)");
+    const update = () => setIsNarrow(media.matches);
+    update();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  return isNarrow;
+}
+
 function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
+  const isNarrow = useNarrowViewport();
   const option = useMemo<echarts.EChartsOption>(() => {
     const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
     const dates = sorted.map((run) => run.dateTime.slice(0, 10));
@@ -1163,16 +1196,24 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
     return {
       color: ["#1864ab", "#2b8a3e", "#c92a2a", "#f08c00"],
       tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
-      legend: { top: 8, left: 12, data: ["实际配速", "3次移动平均", "单次距离", "平均心率"] },
-      grid: { top: 70, left: 62, right: 126, bottom: 58, containLabel: true },
+      legend: {
+        top: 8,
+        left: 12,
+        type: isNarrow ? "scroll" : "plain",
+        itemGap: isNarrow ? 8 : 12,
+        data: ["实际配速", "3次移动平均", "单次距离", "平均心率"]
+      },
+      grid: isNarrow
+        ? { top: 86, left: 42, right: 38, bottom: 58, containLabel: true }
+        : { top: 70, left: 62, right: 126, bottom: 58, containLabel: true },
       dataZoom: xAxisZoom(dates.length, 8),
       xAxis: { type: "category", data: dates, boundaryGap: false },
       yAxis: [
         {
           type: "value",
-          name: "配速 /km",
+          name: isNarrow ? "" : "配速 /km",
           nameLocation: "middle",
-          nameGap: 46,
+          nameGap: isNarrow ? 0 : 46,
           inverse: true,
           min: paceRange.min,
           max: paceRange.max,
@@ -1180,22 +1221,25 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
         },
         {
           type: "value",
-          name: "距离 km",
+          name: isNarrow ? "" : "距离 km",
           nameLocation: "middle",
-          nameGap: 46,
+          nameGap: isNarrow ? 0 : 46,
           position: "right",
           min: distanceRange.min,
           max: distanceRange.max
         },
         {
           type: "value",
-          name: "心率 bpm",
+          name: isNarrow ? "" : "心率 bpm",
           nameLocation: "middle",
-          nameGap: 48,
+          nameGap: isNarrow ? 0 : 48,
           position: "right",
-          offset: 52,
+          offset: isNarrow ? 0 : 52,
           min: heartRateRange.min,
-          max: heartRateRange.max
+          max: heartRateRange.max,
+          axisLabel: { show: !isNarrow },
+          axisTick: { show: !isNarrow },
+          splitLine: { show: false }
         }
       ],
       series: [
@@ -1205,7 +1249,7 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
         { name: "平均心率", type: "line", yAxisIndex: 2, data: heartRates, smooth: true, symbolSize: 7, clip: true }
       ]
     };
-  }, [runs]);
+  }, [runs, isNarrow]);
 
   return (
     <div className="chart-block">
@@ -1216,6 +1260,7 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
 }
 
 function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
+  const isNarrow = useNarrowViewport();
   const option = useMemo<echarts.EChartsOption>(() => {
     const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
@@ -1241,14 +1286,16 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
     return {
       color: ["#d59b3a", "#7048e8"],
       tooltip: { formatter: chartTooltipFormatter },
-      legend: { top: 8, left: 12, data: ["体重-配速", "体重-心率"] },
-      grid: { top: 64, left: 62, right: 86, bottom: 58, containLabel: true },
+      legend: { top: 8, left: 12, itemGap: isNarrow ? 8 : 12, data: ["体重-配速", "体重-心率"] },
+      grid: isNarrow
+        ? { top: 70, left: 42, right: 38, bottom: 58, containLabel: true }
+        : { top: 64, left: 62, right: 86, bottom: 58, containLabel: true },
       dataZoom: xValueZoom(),
       xAxis: {
         type: "value",
         name: "体重 kg",
         nameLocation: "middle",
-        nameGap: 32,
+        nameGap: isNarrow ? 24 : 32,
         min: weightRange.min,
         max: weightRange.max,
         splitLine: { lineStyle: { type: "dashed" } }
@@ -1256,9 +1303,9 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
       yAxis: [
         {
           type: "value",
-          name: "配速 /km",
+          name: isNarrow ? "" : "配速 /km",
           nameLocation: "middle",
-          nameGap: 46,
+          nameGap: isNarrow ? 0 : 46,
           inverse: true,
           min: paceRange.min,
           max: paceRange.max,
@@ -1266,9 +1313,9 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
         },
         {
           type: "value",
-          name: "心率 bpm",
+          name: isNarrow ? "" : "心率 bpm",
           nameLocation: "middle",
-          nameGap: 48,
+          nameGap: isNarrow ? 0 : 48,
           position: "right",
           min: heartRateRange.min,
           max: heartRateRange.max
@@ -1292,7 +1339,7 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
         }
       ]
     };
-  }, [runs, weights]);
+  }, [runs, weights, isNarrow]);
 
   return (
     <div className="chart-block">
@@ -1668,7 +1715,7 @@ function RunForm({
   editingRun: RunningRecord | null;
   shoes: RunningShoe[];
   onCancelEdit: () => void;
-  onSaved: () => void;
+  onSaved: (run: RunningRecord) => void;
 }) {
   const [draft, setDraft] = useState<RunDraft>(() => (editingRun ? draftFromRun(editingRun) : newRunDraft()));
   const [files, setFiles] = useState<File[]>([]);
@@ -1737,16 +1784,17 @@ function RunForm({
         createdAt: editingRun?.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
+      let savedRun: RunningRecord;
       if (editingRun) {
-        await api.updateRun(payload);
+        savedRun = (await api.updateRun(payload)).run;
       } else {
-        await api.createRun(payload);
+        savedRun = (await api.createRun(payload)).run;
       }
       setDraft(newRunDraft());
       setFiles([]);
       setRecognizedText("");
       setMessage(editingRun ? "跑步记录已更新。" : "跑步记录已保存。");
-      onSaved();
+      onSaved(savedRun);
       onCancelEdit();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败。");
@@ -1942,11 +1990,13 @@ function RunForm({
 function ShoeLibrary({
   shoes,
   runs,
-  onChanged
+  onSaved,
+  onDeleted
 }: {
   shoes: RunningShoe[];
   runs: RunningRecord[];
-  onChanged: () => void;
+  onSaved: (shoe: RunningShoe) => void;
+  onDeleted: (shoeId: string) => void;
 }) {
   const [name, setName] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
@@ -2002,16 +2052,17 @@ function ShoeLibrary({
         createdAt: editingShoe?.createdAt ?? now,
         updatedAt: now
       };
+      let savedShoe: RunningShoe;
       if (editingShoe) {
-        await api.updateShoe(shoe);
+        savedShoe = (await api.updateShoe(shoe)).shoe;
       } else {
-        await api.createShoe(shoe);
+        savedShoe = (await api.createShoe(shoe)).shoe;
       }
       setName("");
       setPhoto(null);
       setEditingShoe(null);
       setMessage(editingShoe ? "跑鞋已更新。" : "跑鞋已添加。");
-      onChanged();
+      onSaved(savedShoe);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存跑鞋失败。");
     } finally {
@@ -2031,7 +2082,7 @@ function ShoeLibrary({
     const ok = window.confirm(`确定删除「${shoe.name}」吗？已关联的 ${formatKm(usedKm)} km 跑步记录会变为未选择跑鞋。`);
     if (!ok) return;
     await api.deleteShoe(shoe.id);
-    onChanged();
+    onDeleted(shoe.id);
   }
 
   return (
@@ -2105,7 +2156,15 @@ function ShoeLibrary({
   );
 }
 
-function WeightForm({ editingWeight, onCancelEdit, onSaved }: { editingWeight: WeightRecord | null; onCancelEdit: () => void; onSaved: () => void }) {
+function WeightForm({
+  editingWeight,
+  onCancelEdit,
+  onSaved
+}: {
+  editingWeight: WeightRecord | null;
+  onCancelEdit: () => void;
+  onSaved: (weight: WeightRecord, previousDate: string | null) => void;
+}) {
   const [date, setDate] = useState(editingWeight?.date ?? new Date().toISOString().slice(0, 10));
   const [weightKg, setWeightKg] = useState(editingWeight ? String(editingWeight.weightKg) : "");
   const [message, setMessage] = useState("");
@@ -2119,13 +2178,14 @@ function WeightForm({ editingWeight, onCancelEdit, onSaved }: { editingWeight: W
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     try {
-      await api.saveWeight({ date, weightKg: parseNumber(weightKg) });
+      const saved = await api.saveWeight({ date, weightKg: parseNumber(weightKg) });
+      const previousDate = editingWeight && editingWeight.date !== date ? editingWeight.date : null;
       if (editingWeight && editingWeight.date !== date) {
         await api.deleteWeight(editingWeight.date);
       }
       setWeightKg("");
       setMessage(editingWeight ? "体重记录已更新。" : "体重记录已保存。");
-      onSaved();
+      onSaved(saved.weight, previousDate);
       onCancelEdit();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "保存失败。");
@@ -2347,26 +2407,52 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   async function refresh() {
     setLoading(true);
-    const [runData, shoeData, weightData, predictionData] = await Promise.all([
+    const [runData, shoeData, weightData] = await Promise.all([
       api.listRuns(),
       api.listShoes(),
-      api.listWeights(),
-      api.prediction({
-        targetDistanceKm: targetDistance,
-        targetFinishSec: appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null,
-        targetDate: appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null
-      })
+      api.listWeights()
     ]);
-    setRuns(runData.runs);
-    setShoes(shoeData.shoes);
-    setWeights(weightData.weights);
-    setPrediction(predictionData.prediction);
+    setRuns(sortRuns(runData.runs));
+    setShoes(sortShoes(shoeData.shoes));
+    setWeights(sortWeights(weightData.weights));
     setLoading(false);
   }
 
   useEffect(() => {
     refresh().catch(() => setLoading(false));
-  }, [targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
+  }, []);
+
+  useEffect(() => {
+    try {
+      setPrediction(
+        buildPrediction(runs, weights, targetDistance, {
+          targetFinishSec: appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null,
+          targetDate: appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null
+        })
+      );
+    } catch {
+      setPrediction(null);
+    }
+  }, [runs, weights, targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
+
+  function upsertRun(run: RunningRecord) {
+    setRuns((current) => sortRuns([run, ...current.filter((item) => item.id !== run.id)]));
+  }
+
+  function upsertWeight(weight: WeightRecord, previousDate: string | null = null) {
+    setWeights((current) =>
+      sortWeights([weight, ...current.filter((item) => item.date !== weight.date && item.date !== previousDate)])
+    );
+  }
+
+  function upsertShoe(shoe: RunningShoe) {
+    setShoes((current) => sortShoes([shoe, ...current.filter((item) => item.id !== shoe.id)]));
+  }
+
+  function removeShoeFromState(shoeId: string) {
+    setShoes((current) => current.filter((shoe) => shoe.id !== shoeId));
+    setRuns((current) => current.map((run) => (run.shoeId === shoeId ? { ...run, shoeId: null, updatedAt: new Date().toISOString() } : run)));
+  }
 
   const summary = useMemo(() => {
     const totalDistance = runs.reduce((sum, run) => sum + run.distanceKm, 0);
@@ -2410,7 +2496,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     if (editingRun?.id === run.id) {
       setEditingRun(null);
     }
-    await refresh();
+    setRuns((current) => current.filter((item) => item.id !== run.id));
   }
 
   async function deleteWeightRecord(weight: WeightRecord) {
@@ -2420,7 +2506,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     if (editingWeight?.date === weight.date) {
       setEditingWeight(null);
     }
-    await refresh();
+    setWeights((current) => current.filter((item) => item.date !== weight.date));
   }
 
   return (
@@ -2550,9 +2636,9 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       {activeView === "records" && (
         <section className="records-page">
           <section className="workspace-grid">
-            <RunForm shoes={shoes} editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={refresh} />
+            <RunForm shoes={shoes} editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={upsertRun} />
             <div className="side-column">
-              <WeightForm editingWeight={editingWeight} onCancelEdit={() => setEditingWeight(null)} onSaved={refresh} />
+              <WeightForm editingWeight={editingWeight} onCancelEdit={() => setEditingWeight(null)} onSaved={upsertWeight} />
               {loading && <span className="loading-dot">同步中</span>}
             </div>
           </section>
@@ -2577,7 +2663,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       {activeView === "vdot" && <VdotPage runs={runs} />}
 
       {activeView === "shoes" && (
-        <ShoeLibrary shoes={shoes} runs={runs} onChanged={refresh} />
+        <ShoeLibrary shoes={shoes} runs={runs} onSaved={upsertShoe} onDeleted={removeShoeFromState} />
       )}
     </main>
   );

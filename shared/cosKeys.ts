@@ -20,6 +20,18 @@ export function keepKey(username: string): string {
   return `${userPrefix(username)}.keep`;
 }
 
+export function runsIndexKey(username: string): string {
+  return `${userPrefix(username)}index/runs.json`;
+}
+
+export function shoesIndexKey(username: string): string {
+  return `${userPrefix(username)}index/shoes.json`;
+}
+
+export function weightsIndexKey(username: string): string {
+  return `${userPrefix(username)}index/weights.json`;
+}
+
 export function runKey(username: string, runId: string): string {
   return `${userPrefix(username)}runs/${runId}.json`;
 }
