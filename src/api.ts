@@ -273,17 +273,28 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (isLocalPreviewHost() && path.startsWith("/api/")) {
     return localPreviewRequest<T>(path, init);
   }
-  const response = await fetch(path, {
-    ...init,
-    credentials: "include",
-    headers: {
-      ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-      ...(init.headers ?? {})
-    }
-  });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...init,
+      credentials: "include",
+      headers: {
+        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(init.headers ?? {})
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`浏览器无法连接服务器接口：${path}。原因：${message || "未知网络错误"}。请检查网络、Netlify 是否在线，或稍后重试。`);
+  }
+  const data = (await response.json().catch(() => null)) as (T & { error?: string; status?: number }) | null;
   if (!response.ok) {
-    throw new Error(data.error ?? "请求失败。");
+    const serverMessage = data?.error;
+    const statusText = response.statusText ? ` ${response.statusText}` : "";
+    throw new Error(serverMessage ?? `服务器请求失败：${response.status}${statusText}。接口：${path}`);
+  }
+  if (!data) {
+    throw new Error(`服务器返回的内容不是有效 JSON。接口：${path}，状态：${response.status}。`);
   }
   return data;
 }

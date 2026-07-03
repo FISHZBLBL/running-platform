@@ -29,6 +29,12 @@ class CosStorage implements StorageAdapter {
     this.region = getEnv("COS_REGION", "ap-beijing")!;
     this.secretId = getEnv("COS_SECRET_ID")!;
     this.secretKey = getEnv("COS_SECRET_KEY")!;
+    if (this.bucket.includes(".cos.")) {
+      throw new Error("腾讯 COS 配置错误：COS_BUCKET 只能填写存储桶名称，例如 running-platform-1323797631，不能填写完整请求域名。");
+    }
+    if (this.region.includes(".")) {
+      throw new Error("腾讯 COS 配置错误：COS_REGION 只能填写地域，例如 ap-beijing，不能填写完整请求域名。");
+    }
   }
 
   async getText(key: string): Promise<string | null> {
@@ -112,8 +118,14 @@ class CosStorage implements StorageAdapter {
       headers,
       body: payload?.body ? new Uint8Array(payload.body) : undefined
     }).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`服务器连接腾讯 COS 失败：${message}`);
+      throw new Error(
+        [
+          "服务器连接腾讯 COS 失败。",
+          `操作：${method} ${key || "/"}`,
+          `目标：${host}`,
+          `原因：${describeNetworkFailure(error)}`
+        ].join(" ")
+      );
     });
   }
 
@@ -147,8 +159,84 @@ class CosStorage implements StorageAdapter {
       return;
     }
     const text = await response.text().catch(() => "");
-    throw new Error(`COS request failed for ${key || "/"}: ${response.status} ${text.slice(0, 240)}`);
+    const requestId = response.headers.get("x-cos-request-id") ?? response.headers.get("x-cos-trace-id");
+    const details = [
+      `腾讯 COS 请求失败。对象：${key || "/"}`,
+      `HTTP 状态：${response.status} ${response.statusText || ""}`.trim(),
+      requestId ? `请求 ID：${requestId}` : "",
+      `可能原因：${cosStatusHint(response.status)}`,
+      text ? `COS 返回：${compactText(text).slice(0, 240)}` : ""
+    ].filter(Boolean);
+    throw new Error(details.join(" "));
   }
+}
+
+function describeNetworkFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? (error as Error & { cause?: unknown }).cause : undefined;
+  const causeInfo = objectDetails(cause);
+  const code = causeInfo.code ?? codeFromMessage(message);
+  const hint = networkHint(code, message);
+  return [
+    message || "未知网络错误",
+    causeInfo.summary ? `底层原因：${causeInfo.summary}` : "",
+    hint ? `建议检查：${hint}` : ""
+  ].filter(Boolean).join("；");
+}
+
+function objectDetails(value: unknown): { code?: string; summary?: string } {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const fields = ["code", "name", "message", "syscall", "hostname", "host", "address", "port"]
+    .map((field) => [field, record[field]] as const)
+    .filter(([, fieldValue]) => typeof fieldValue === "string" || typeof fieldValue === "number")
+    .map(([field, fieldValue]) => `${field}=${String(fieldValue)}`);
+  return {
+    code: typeof record.code === "string" ? record.code : undefined,
+    summary: fields.join(", ")
+  };
+}
+
+function codeFromMessage(message: string): string | undefined {
+  return ["ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED", "UND_ERR_CONNECT_TIMEOUT"].find((code) =>
+    message.includes(code)
+  );
+}
+
+function networkHint(code: string | undefined, message: string): string {
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return "域名解析失败，重点检查 COS_BUCKET 和 COS_REGION 是否正确。";
+  }
+  if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT" || message.toLowerCase().includes("timeout")) {
+    return "Netlify Functions 到腾讯 COS 连接超时，可以稍后重试；如果反复出现，考虑把数据接口迁到国内云函数或增加重试。";
+  }
+  if (code === "ECONNRESET") {
+    return "连接被中途重置，通常是跨境网络波动或 COS 侧临时断开。";
+  }
+  if (code === "ECONNREFUSED") {
+    return "目标服务拒绝连接，重点检查请求域名、地域和网络出口。";
+  }
+  if (message.toLowerCase().includes("certificate") || message.toLowerCase().includes("tls")) {
+    return "TLS/证书校验失败，检查 COS 请求域名是否正确。";
+  }
+  return "检查 Netlify 环境变量、COS 桶地域、腾讯云权限和当前网络连通性。";
+}
+
+function cosStatusHint(status: number): string {
+  if (status === 400) return "请求参数或签名格式错误，重点检查 COS_BUCKET、COS_REGION、对象路径编码和服务器时间。";
+  if (status === 401) return "腾讯云密钥无效或签名校验失败，检查 COS_SECRET_ID 和 COS_SECRET_KEY。";
+  if (status === 403) return "密钥权限不足、桶策略拒绝访问，或当前 Secret 未授权读写该存储桶。";
+  if (status === 404) return "对象不存在，或存储桶名称/地域配置不匹配。";
+  if (status === 409) return "COS 对象状态冲突，可能是并发写入或删除导致。";
+  if (status === 429) return "COS 请求过于频繁或被限流。";
+  if (status >= 500) return "腾讯 COS 服务端错误或跨云网络波动，可以稍后重试。";
+  return "查看 COS 返回内容和 Netlify Function 日志。";
+}
+
+function compactText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function sha1(value: string): string {
@@ -248,9 +336,12 @@ let adapter: StorageAdapter | null = null;
 
 export function storage(): StorageAdapter {
   if (!adapter) {
-    const hasCosSecrets = Boolean(getEnv("COS_SECRET_ID") && getEnv("COS_SECRET_KEY"));
+    const missing = ["COS_SECRET_ID", "COS_SECRET_KEY"].filter((name) => !getEnv(name));
+    const hasCosSecrets = missing.length === 0;
     if (!hasCosSecrets && (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime())) {
-      throw new Error("COS_SECRET_ID and COS_SECRET_KEY must be configured for Netlify Functions.");
+      throw new Error(
+        `腾讯 COS 环境变量缺失：${missing.join(", ")}。请在 Netlify Site configuration -> Environment variables 中配置后重新部署。`
+      );
     }
     adapter = hasCosSecrets ? new CosStorage() : new LocalStorage();
   }
