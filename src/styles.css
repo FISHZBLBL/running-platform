@@ -133,6 +133,17 @@ textarea {
   resize: vertical;
 }
 
+input[type="date"],
+input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+}
+
 .primary-button,
 .ghost-button {
   align-items: center;
@@ -243,6 +254,7 @@ textarea {
 }
 
 .hero-grid {
+  align-items: start;
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 2fr) minmax(320px, 0.75fr);
@@ -351,7 +363,7 @@ textarea {
 }
 
 .target-input {
-  min-width: 150px;
+  min-width: 0;
 }
 
 .target-controls {
@@ -360,6 +372,7 @@ textarea {
   gap: 10px;
   grid-template-columns: minmax(190px, 1.3fr) minmax(130px, 0.8fr) minmax(130px, 0.8fr);
   max-width: 560px;
+  min-width: 0;
   width: 100%;
 }
 
@@ -599,13 +612,18 @@ textarea {
   align-items: center;
   display: grid;
   gap: 8px;
-  grid-template-columns: 28px repeat(5, minmax(86px, 1fr));
-  min-width: 620px;
+  grid-template-columns: 28px repeat(5, minmax(86px, 1fr)) minmax(64px, auto);
+  min-width: 700px;
 }
 
 .split-row strong {
   color: #1864ab;
   text-align: center;
+}
+
+.split-delete-button {
+  min-height: 42px;
+  padding: 8px 10px;
 }
 
 .screenshot-review {
@@ -1194,6 +1212,27 @@ textarea {
   }
 }
 
+@media (max-width: 1360px) {
+  .hero-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .chart-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .target-controls {
+    max-width: none;
+  }
+}
+
+@media (max-width: 1180px) {
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 720px) {
   .app-shell {
     padding: 14px;
@@ -1262,14 +1301,7 @@ textarea {
 
   input[type="date"],
   input[type="datetime-local"] {
-    -webkit-appearance: none;
-    appearance: none;
-    display: block;
     font-size: 16px;
-    max-width: 100%;
-    min-width: 0;
-    overflow: hidden;
-    text-align: left;
   }
 
   .target-input {

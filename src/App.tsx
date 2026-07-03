@@ -1111,9 +1111,22 @@ function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["data
       start,
       end: 100,
       bottom: 8,
-      height: 18,
+      height: 26,
       filterMode: "filter",
-      showDataShadow: false
+      showDataShadow: false,
+      brushSelect: false,
+      handleSize: "160%",
+      moveHandleSize: 12,
+      fillerColor: "rgba(24, 100, 171, 0.16)",
+      borderColor: "#cfd8e5",
+      handleStyle: {
+        color: "#ffffff",
+        borderColor: "#93b6df",
+        borderWidth: 2
+      },
+      moveHandleStyle: {
+        color: "#93b6df"
+      }
     }
   ];
 }
@@ -1136,9 +1149,22 @@ function xValueZoom(): echarts.EChartsOption["dataZoom"] {
       start: 0,
       end: 100,
       bottom: 8,
-      height: 18,
+      height: 26,
       filterMode: "filter",
-      showDataShadow: false
+      showDataShadow: false,
+      brushSelect: false,
+      handleSize: "160%",
+      moveHandleSize: 12,
+      fillerColor: "rgba(24, 100, 171, 0.16)",
+      borderColor: "#cfd8e5",
+      handleStyle: {
+        color: "#ffffff",
+        borderColor: "#93b6df",
+        borderWidth: 2
+      },
+      moveHandleStyle: {
+        color: "#93b6df"
+      }
     }
   ];
 }
@@ -1751,6 +1777,13 @@ function RunForm({
     }));
   }
 
+  function removeSplit(index: number) {
+    setDraft((current) => ({
+      ...current,
+      splits: current.splits.filter((_split, splitIndex) => splitIndex !== index)
+    }));
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
@@ -1978,6 +2011,9 @@ function RunForm({
                 <input value={split.heartRateBpm} onChange={(event) => setSplit(index, "heartRateBpm", event.target.value)} placeholder="心率" />
                 <input value={split.powerW} onChange={(event) => setSplit(index, "powerW", event.target.value)} placeholder="功率" />
                 <input value={split.cadenceSpm} onChange={(event) => setSplit(index, "cadenceSpm", event.target.value)} placeholder="步频" />
+                <button type="button" className="ghost-button small-button danger-button split-delete-button" onClick={() => removeSplit(index)}>
+                  删除
+                </button>
               </div>
             ))}
           </div>
@@ -2518,7 +2554,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       <header className="topbar">
         <div>
           <p className="eyebrow">Running Platform</p>
-          <h1>跑步数据分析台</h1>
+          <h1>RUNNING PLATFORM</h1>
           <nav className="view-tabs" aria-label="页面切换">
             <button
               type="button"
