@@ -789,20 +789,37 @@ function simpleRegressionLine(points: number[][], xIndex: number, yIndex: number
 function chartTooltipFormatter(params: unknown) {
   const items = Array.isArray(params) ? params : [params];
   const first = items[0] as { axisValueLabel?: string; name?: string } | undefined;
-  const lines = [`<strong>${first?.axisValueLabel ?? first?.name ?? ""}</strong>`];
+  const header = first?.axisValueLabel ?? first?.name ?? "";
+  const lines = header ? [`<strong>${header}</strong>`] : [];
   items.forEach((item) => {
     const point = item as { marker?: string; seriesName?: string; value?: unknown };
     const name = point.seriesName ?? "";
     const value = point.value;
     let formatted = "";
     if (name === "体重-配速" && Array.isArray(value)) {
-      formatted = `${Number(value[0]).toFixed(1)} kg · ${formatPace(Number(value[1]))} /km · ${Number(value[2]).toFixed(1)} km`;
+      lines.push(`${point.marker ?? ""}${name}`);
+      lines.push(`体重：${Number(value[0]).toFixed(1)} kg`);
+      lines.push(`配速：${formatPace(Number(value[1]))} /km`);
+      lines.push(`距离：${Number(value[2]).toFixed(1)} km`);
+      return;
     } else if (name === "体重-心率" && Array.isArray(value)) {
-      formatted = `${Number(value[0]).toFixed(1)} kg · ${Number(value[1]).toFixed(0)} bpm · ${Number(value[2]).toFixed(1)} km`;
+      lines.push(`${point.marker ?? ""}${name}`);
+      lines.push(`体重：${Number(value[0]).toFixed(1)} kg`);
+      lines.push(`心率：${Number(value[1]).toFixed(0)} bpm`);
+      lines.push(`距离：${Number(value[2]).toFixed(1)} km`);
+      return;
     } else if (name === "配速-心率" && Array.isArray(value)) {
-      formatted = `${formatPace(Number(value[0]))} /km · ${Number(value[1]).toFixed(0)} bpm · ${Number(value[2]).toFixed(1)} km · ${value[3]}`;
+      lines.push(`${point.marker ?? ""}${name}`);
+      lines.push(`日期：${value[3]}`);
+      lines.push(`配速：${formatPace(Number(value[0]))} /km`);
+      lines.push(`心率：${Number(value[1]).toFixed(0)} bpm`);
+      lines.push(`距离：${Number(value[2]).toFixed(1)} km`);
+      return;
     } else if (name === "心率拟合" && Array.isArray(value)) {
-      formatted = `${formatPace(Number(value[0]))} /km · ${Number(value[1]).toFixed(0)} bpm`;
+      lines.push(`${point.marker ?? ""}${name}`);
+      lines.push(`配速：${formatPace(Number(value[0]))} /km`);
+      lines.push(`心率：${Number(value[1]).toFixed(0)} bpm`);
+      return;
     } else if (name.includes("配速") || name.includes("移动平均")) {
       formatted = `${formatPace(Number(value))} /km`;
     } else if (name.includes("心率")) {
@@ -817,6 +834,44 @@ function chartTooltipFormatter(params: unknown) {
     lines.push(`${point.marker ?? ""}${name}: ${formatted}`);
   });
   return lines.join("<br />");
+}
+
+type TooltipPositionSize = {
+  contentSize: [number, number];
+  viewSize: [number, number];
+};
+
+function boundedTooltipPosition(point: number[], _params: unknown, _dom: unknown, _rect: unknown, size: TooltipPositionSize) {
+  const margin = 8;
+  const [pointX, pointY] = point;
+  const [contentWidth, contentHeight] = size.contentSize;
+  const [viewWidth, viewHeight] = size.viewSize;
+  let left = pointX + 12;
+  let top = pointY + 12;
+
+  if (left + contentWidth + margin > viewWidth) {
+    left = pointX - contentWidth - 12;
+  }
+  if (top + contentHeight + margin > viewHeight) {
+    top = pointY - contentHeight - 12;
+  }
+
+  return [
+    Math.max(margin, Math.min(left, viewWidth - contentWidth - margin)),
+    Math.max(margin, Math.min(top, viewHeight - contentHeight - margin))
+  ];
+}
+
+function chartTooltip(extra: echarts.EChartsOption["tooltip"] = {}): echarts.EChartsOption["tooltip"] {
+  return {
+    formatter: chartTooltipFormatter,
+    confine: true,
+    appendToBody: true,
+    position: boundedTooltipPosition,
+    extraCssText:
+      "max-width:min(260px, calc(100vw - 32px));white-space:normal;line-height:1.45;overflow-wrap:anywhere;box-shadow:0 12px 30px rgba(15,23,42,.18);",
+    ...extra
+  };
 }
 
 function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: WeightRecord[] }) {
@@ -878,9 +933,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
 
     chart.setOption({
       color: ["#1864ab", "#2b8a3e", "#c92a2a", "#f08c00", "#0f766e", "#7048e8", "#7c2d12"],
-      tooltip: {
-        formatter: chartTooltipFormatter
-      },
+      tooltip: chartTooltip(),
       legend: [
         { top: 8, left: 16, data: ["实际配速", "3次移动平均", "单次距离", "平均心率"] },
         { top: 342, left: 16, data: ["体重-配速", "体重-心率"] },
@@ -1221,7 +1274,7 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
 
     return {
       color: ["#1864ab", "#2b8a3e", "#c92a2a", "#f08c00"],
-      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      tooltip: chartTooltip({ trigger: "axis" }),
       legend: {
         top: 8,
         left: isNarrow ? 4 : 12,
@@ -1315,7 +1368,7 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
 
     return {
       color: ["#d59b3a", "#7048e8"],
-      tooltip: { formatter: chartTooltipFormatter },
+      tooltip: chartTooltip(),
       legend: { top: 8, left: 12, itemGap: isNarrow ? 8 : 12, data: ["体重-配速", "体重-心率"] },
       grid: isNarrow
         ? { top: 70, left: 42, right: 38, bottom: 58, containLabel: true }
@@ -1400,7 +1453,7 @@ function PaceHeartChart({ runs }: { runs: RunningRecord[] }) {
 
     return {
       color: ["#1864ab", "#2b8a3e"],
-      tooltip: { formatter: chartTooltipFormatter },
+      tooltip: chartTooltip(),
       legend: { top: 8, left: 12, data: ["配速-心率", "心率拟合"] },
       grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
       dataZoom: xValueZoom(),
@@ -1469,7 +1522,7 @@ function VolumeChart({ runs }: { runs: RunningRecord[] }) {
 
     return {
       color: ["#0f766e", "#1864ab"],
-      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      tooltip: chartTooltip({ trigger: "axis" }),
       legend: { top: 8, left: 12, data: [volumeLabel, volumeLongestLabel] },
       grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
       dataZoom: xAxisZoom(volumeLabels.length, 6),
@@ -1529,7 +1582,7 @@ function WeightTrendChart({ weights }: { weights: WeightRecord[] }) {
 
     return {
       color: ["#1864ab"],
-      tooltip: { trigger: "axis", formatter: chartTooltipFormatter },
+      tooltip: chartTooltip({ trigger: "axis" }),
       legend: { top: 8, left: 12, data: ["体重"] },
       grid: { top: 64, left: 62, right: 52, bottom: 58, containLabel: true },
       dataZoom: xAxisZoom(weightDates.length, 10),
