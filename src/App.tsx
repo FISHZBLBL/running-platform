@@ -866,7 +866,6 @@ function chartTooltip(extra: echarts.EChartsOption["tooltip"] = {}): echarts.ECh
   return {
     formatter: chartTooltipFormatter,
     confine: true,
-    appendToBody: true,
     position: boundedTooltipPosition,
     extraCssText:
       "max-width:min(260px, calc(100vw - 32px));white-space:normal;line-height:1.45;overflow-wrap:anywhere;box-shadow:0 12px 30px rgba(15,23,42,.18);",
