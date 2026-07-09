@@ -21,9 +21,13 @@ npm run netlify:dev
    - `COS_SECRET_KEY`
    - `COS_BUCKET=running-platform-1323797631`
    - `COS_REGION=ap-beijing`
-   - `COS_DOMAIN=running-platform-1323797631.cos.ap-beijing.myqcloud.com`
+   - `COS_DOMAIN=running-platform-1323797631.cos.accelerate.myqcloud.com`
+   - `COS_MAX_ATTEMPTS=3`
+   - `COS_REQUEST_TIMEOUT_MS=15000`
    - `JWT_SECRET`
    - `INVITE_CODE=FISH_Z`
+
+Netlify Functions 不在腾讯云内网中运行，所以 `COS_DOMAIN` 应使用公网全球加速域名，不要使用 `cos-internal` 内网全球加速域名。
 
 ## Scripts
 

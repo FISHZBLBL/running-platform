@@ -21,14 +21,20 @@ export interface StorageAdapter {
 class CosStorage implements StorageAdapter {
   private bucket: string;
   private region: string;
+  private requestHost: string;
   private secretId: string;
   private secretKey: string;
+  private maxAttempts: number;
+  private requestTimeoutMs: number;
 
   constructor() {
     this.bucket = getEnv("COS_BUCKET", "running-platform-1323797631")!;
     this.region = getEnv("COS_REGION", "ap-beijing")!;
+    this.requestHost = normalizeCosHost(getEnv("COS_DOMAIN", `${this.bucket}.cos.${this.region}.myqcloud.com`)!);
     this.secretId = getEnv("COS_SECRET_ID")!;
     this.secretKey = getEnv("COS_SECRET_KEY")!;
+    this.maxAttempts = numberEnv("COS_MAX_ATTEMPTS", 3);
+    this.requestTimeoutMs = numberEnv("COS_REQUEST_TIMEOUT_MS", 15000);
     if (this.bucket.includes(".cos.")) {
       throw new Error("腾讯 COS 配置错误：COS_BUCKET 只能填写存储桶名称，例如 running-platform-1323797631，不能填写完整请求域名。");
     }
@@ -99,7 +105,7 @@ class CosStorage implements StorageAdapter {
     payload?: { body: Buffer; contentType: string },
     query: Record<string, string> = {}
   ): Promise<Response> {
-    const host = `${this.bucket}.cos.${this.region}.myqcloud.com`;
+    const host = this.requestHost;
     const pathname = key ? `/${encodeCosPath(key)}` : "/";
     const searchParams = new URLSearchParams();
     for (const [paramKey, paramValue] of Object.entries(query).sort(([a], [b]) => a.localeCompare(b))) {
@@ -107,29 +113,50 @@ class CosStorage implements StorageAdapter {
     }
     const queryString = searchParams.toString();
     const headers = new Headers({
-      Authorization: this.authorization(method.toLowerCase(), pathname, query),
+      Authorization: this.authorization(method.toLowerCase(), pathname, query, host),
       Host: host
     });
     if (payload?.contentType) {
       headers.set("Content-Type", payload.contentType);
     }
-    return fetch(`https://${host}${pathname}${queryString ? `?${queryString}` : ""}`, {
-      method,
-      headers,
-      body: payload?.body ? new Uint8Array(payload.body) : undefined
-    }).catch((error) => {
-      throw new Error(
-        [
-          "服务器连接腾讯 COS 失败。",
-          `操作：${method} ${key || "/"}`,
-          `目标：${host}`,
-          `原因：${describeNetworkFailure(error)}`
-        ].join(" ")
-      );
-    });
+    const url = `https://${host}${pathname}${queryString ? `?${queryString}` : ""}`;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt += 1) {
+      try {
+        const response = await fetchWithTimeout(
+          url,
+          {
+            method,
+            headers,
+            body: payload?.body ? new Uint8Array(payload.body) : undefined
+          },
+          this.requestTimeoutMs
+        );
+        if (attempt < this.maxAttempts && shouldRetryStatus(response.status)) {
+          await delay(backoffMs(attempt));
+          continue;
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (attempt < this.maxAttempts) {
+          await delay(backoffMs(attempt));
+          continue;
+        }
+      }
+    }
+    throw new Error(
+      [
+        "服务器连接腾讯 COS 失败。",
+        `操作：${method} ${key || "/"}`,
+        `目标：${host}`,
+        `尝试：${this.maxAttempts}/${this.maxAttempts}`,
+        `原因：${describeNetworkFailure(lastError)}`
+      ].join(" ")
+    );
   }
 
-  private authorization(method: string, pathname: string, query: Record<string, string>): string {
+  private authorization(method: string, pathname: string, query: Record<string, string>, host: string): string {
     const now = Math.floor(Date.now() / 1000);
     const keyTime = `${now - 60};${now + 600}`;
     const signKey = hmacSha1(this.secretKey, keyTime);
@@ -139,7 +166,7 @@ class CosStorage implements StorageAdapter {
       .map(([key, value]) => `${encodeURIComponent(key).toLowerCase()}=${encodeURIComponent(value)}`)
       .join("&");
     const headerList = "host";
-    const httpHeaders = `host=${this.bucket}.cos.${this.region}.myqcloud.com`;
+    const httpHeaders = `host=${host}`;
     const httpString = `${method}\n${pathname}\n${httpParameters}\n${httpHeaders}\n`;
     const stringToSign = `sha1\n${keyTime}\n${sha1(httpString)}\n`;
     const signature = hmacSha1(signKey, stringToSign);
@@ -182,6 +209,41 @@ function describeNetworkFailure(error: unknown): string {
     causeInfo.summary ? `底层原因：${causeInfo.summary}` : "",
     hint ? `建议检查：${hint}` : ""
   ].filter(Boolean).join("；");
+}
+
+function normalizeCosHost(value: string): string {
+  const host = value.trim().replace(/^https?:\/\//i, "").split("/")[0].toLowerCase();
+  if (!host) {
+    throw new Error("腾讯 COS 配置错误：COS_DOMAIN 不能为空。");
+  }
+  return host;
+}
+
+function numberEnv(name: string, fallback: number): number {
+  const value = Number(getEnv(name, String(fallback)));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function shouldRetryStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(800 * 2 ** (attempt - 1), 2500);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function objectDetails(value: unknown): { code?: string; summary?: string } {
