@@ -25,7 +25,7 @@ npm run netlify:dev
    - `COS_MAX_ATTEMPTS=3`
    - `COS_REQUEST_TIMEOUT_MS=15000`
    - `JWT_SECRET`
-   - `INVITE_CODE=FISH_Z`
+   - `INVITE_CODE`：使用私密随机值，不要把真实邀请码提交到 GitHub
 
 Netlify Functions 不在腾讯云内网中运行，所以 `COS_DOMAIN` 应使用公网全球加速域名，不要使用 `cos-internal` 内网全球加速域名。
 

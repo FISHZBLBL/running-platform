@@ -1,0 +1,275 @@
+/* Final shoe-library layout. Kept separate so legacy global rules cannot override it. */
+.shoe-page > .panel > .panel-heading {
+  align-items: flex-end;
+  flex-direction: row;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+
+.shoe-library-actions {
+  align-items: center;
+  flex-direction: row;
+  margin-left: auto;
+}
+
+.shoe-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.shoe-card {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shoe-photo {
+  aspect-ratio: 1;
+  background: #ffffff;
+  border-bottom: 1px solid var(--line-soft);
+  height: auto;
+  padding: 0;
+  width: 100%;
+}
+
+.shoe-photo img {
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.shoe-card-body {
+  align-content: start;
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+}
+
+.shoe-card-heading {
+  min-height: 40px;
+}
+
+.shoe-card-heading > div {
+  min-width: 0;
+}
+
+.shoe-card-heading h3 {
+  color: var(--ink-strong);
+  font-size: 18px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.shoe-performance-strip {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.72fr) minmax(0, 0.9fr);
+}
+
+.shoe-mileage,
+.shoe-run-count,
+.shoe-last-run {
+  background: transparent;
+  border: 0;
+  border-left: 0;
+  border-radius: 0;
+  color: #6b788b;
+  display: grid;
+  gap: 3px;
+  padding: 0;
+}
+
+.shoe-run-count,
+.shoe-last-run {
+  border-left: 1px solid var(--line-soft);
+  padding-left: 10px;
+}
+
+.shoe-mileage span,
+.shoe-run-count span,
+.shoe-last-run span {
+  color: #6b788b;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.shoe-mileage strong,
+.shoe-run-count strong,
+.shoe-last-run strong {
+  color: var(--ink-strong);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.shoe-mileage strong {
+  font-size: 21px;
+}
+
+.shoe-run-count strong {
+  font-size: 17px;
+}
+
+.shoe-last-run strong {
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.shoe-mileage-line {
+  background: #e5ebef;
+  border-radius: 2px;
+  height: 4px;
+  overflow: hidden;
+}
+
+.shoe-mileage-line span {
+  background: #aebbc5;
+  display: block;
+  height: 100%;
+  width: 12%;
+}
+
+.shoe-mileage-line span.has-mileage {
+  background: var(--positive);
+  width: 100%;
+}
+
+.shoe-actions {
+  align-items: center;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1px;
+  padding-top: 10px;
+  width: 100%;
+}
+
+.shoe-actions .small-button {
+  min-width: 88px;
+}
+
+.shoe-form .form-message,
+.empty-shoes {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 900px) {
+  .shoe-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shoe-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .shoe-page > .panel > .panel-heading {
+    align-items: flex-end;
+    flex-direction: row;
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+  }
+
+  .shoe-library-actions {
+    align-items: center;
+    flex-direction: row;
+  }
+
+  .shoe-count {
+    font-size: 10px;
+    padding: 4px 7px;
+  }
+
+  .shoe-grid {
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shoe-form {
+    grid-template-columns: 1fr;
+  }
+
+  .shoe-form .primary-button {
+    justify-self: stretch;
+  }
+
+  .shoe-preview {
+    width: min(180px, 100%);
+  }
+
+  .shoe-card-body {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .shoe-card-heading {
+    min-height: 34px;
+  }
+
+  .shoe-card-heading h3 {
+    font-size: 15px;
+  }
+
+  .shoe-card-heading .eyebrow {
+    font-size: 8px;
+    margin-bottom: 2px;
+  }
+
+  .shoe-performance-strip {
+    gap: 5px 7px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shoe-mileage {
+    grid-column: 1 / -1;
+  }
+
+  .shoe-run-count {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .shoe-mileage strong {
+    font-size: 17px;
+  }
+
+  .shoe-run-count strong {
+    font-size: 14px;
+  }
+
+  .shoe-last-run strong {
+    font-size: 11px;
+  }
+
+  .shoe-actions {
+    gap: 6px;
+    padding-top: 7px;
+  }
+
+  .shoe-actions .small-button {
+    flex: 1;
+    font-size: 12px;
+    min-height: 34px;
+    min-width: 0;
+    padding-inline: 4px;
+  }
+}
+
+@media (max-width: 340px) {
+  .shoe-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (hover: none) {
+  .shoe-card:hover {
+    box-shadow: 0 8px 24px rgba(24, 43, 67, 0.055);
+    transform: none;
+  }
+
+  .shoe-card:hover .shoe-photo img {
+    transform: none;
+  }
+}

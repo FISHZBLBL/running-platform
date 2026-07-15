@@ -38,7 +38,7 @@ export function requiredEnv(name: string): string {
 }
 
 export function inviteCode(): string {
-  return getEnv("INVITE_CODE", "FISH_Z")!;
+  return requiredEnv("INVITE_CODE");
 }
 
 export function jwtSecret(): string {

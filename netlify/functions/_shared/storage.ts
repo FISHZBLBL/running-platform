@@ -13,6 +13,7 @@ export interface StorageAdapter {
   getText(key: string): Promise<string | null>;
   getFile(key: string): Promise<StoredFile | null>;
   putText(key: string, value: string): Promise<void>;
+  putTextIfAbsent(key: string, value: string): Promise<boolean>;
   putFile(key: string, file: StoredFile): Promise<void>;
   delete(key: string): Promise<void>;
   list(prefix: string): Promise<string[]>;
@@ -68,6 +69,10 @@ class CosStorage implements StorageAdapter {
     await this.putObject(key, Buffer.from(value, "utf8"), "application/json; charset=utf-8");
   }
 
+  async putTextIfAbsent(key: string, value: string): Promise<boolean> {
+    return this.putObject(key, Buffer.from(value, "utf8"), "application/json; charset=utf-8", true);
+  }
+
   async putFile(key: string, file: StoredFile): Promise<void> {
     await this.putObject(key, file.body, file.contentType);
   }
@@ -94,15 +99,23 @@ class CosStorage implements StorageAdapter {
     return keys;
   }
 
-  private async putObject(key: string, body: Buffer, contentType: string): Promise<void> {
-    const response = await this.request("PUT", key, { body, contentType });
+  private async putObject(key: string, body: Buffer, contentType: string, forbidOverwrite = false): Promise<boolean> {
+    const response = await this.request("PUT", key, {
+      body,
+      contentType,
+      headers: forbidOverwrite ? { "x-cos-forbid-overwrite": "true" } : undefined
+    });
+    if (forbidOverwrite && (response.status === 409 || response.status === 412)) {
+      return false;
+    }
     await this.assertOk(response, key);
+    return true;
   }
 
   private async request(
     method: "GET" | "PUT" | "DELETE",
     key: string,
-    payload?: { body: Buffer; contentType: string },
+    payload?: { body: Buffer; contentType: string; headers?: Record<string, string> },
     query: Record<string, string> = {}
   ): Promise<Response> {
     const host = this.requestHost;
@@ -112,10 +125,10 @@ class CosStorage implements StorageAdapter {
       searchParams.set(paramKey, paramValue);
     }
     const queryString = searchParams.toString();
-    const headers = new Headers({
-      Authorization: this.authorization(method.toLowerCase(), pathname, query, host),
-      Host: host
-    });
+    const signingHeaders = { host, ...(payload?.headers ?? {}) };
+    const headers = new Headers(payload?.headers);
+    headers.set("Authorization", this.authorization(method.toLowerCase(), pathname, query, signingHeaders));
+    headers.set("Host", host);
     if (payload?.contentType) {
       headers.set("Content-Type", payload.contentType);
     }
@@ -156,7 +169,12 @@ class CosStorage implements StorageAdapter {
     );
   }
 
-  private authorization(method: string, pathname: string, query: Record<string, string>, host: string): string {
+  private authorization(
+    method: string,
+    pathname: string,
+    query: Record<string, string>,
+    headers: Record<string, string>
+  ): string {
     const now = Math.floor(Date.now() / 1000);
     const keyTime = `${now - 60};${now + 600}`;
     const signKey = hmacSha1(this.secretKey, keyTime);
@@ -165,8 +183,13 @@ class CosStorage implements StorageAdapter {
     const httpParameters = sortedQuery
       .map(([key, value]) => `${encodeURIComponent(key).toLowerCase()}=${encodeURIComponent(value)}`)
       .join("&");
-    const headerList = "host";
-    const httpHeaders = `host=${host}`;
+    const sortedHeaders = Object.entries(headers)
+      .map(([key, value]) => [key.toLowerCase(), value.trim()] as const)
+      .sort(([a], [b]) => a.localeCompare(b));
+    const headerList = sortedHeaders.map(([key]) => key).join(";");
+    const httpHeaders = sortedHeaders
+      .map(([key, value]) => `${encodeURIComponent(key).toLowerCase()}=${encodeURIComponent(value).toLowerCase()}`)
+      .join("&");
     const httpString = `${method}\n${pathname}\n${httpParameters}\n${httpHeaders}\n`;
     const stringToSign = `sha1\n${keyTime}\n${sha1(httpString)}\n`;
     const signature = hmacSha1(signKey, stringToSign);
@@ -352,6 +375,20 @@ class LocalStorage implements StorageAdapter {
     const filePath = this.resolve(key);
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, value, "utf8");
+  }
+
+  async putTextIfAbsent(key: string, value: string): Promise<boolean> {
+    const filePath = this.resolve(key);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    try {
+      await writeFile(filePath, value, { encoding: "utf8", flag: "wx" });
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async putFile(key: string, file: StoredFile): Promise<void> {

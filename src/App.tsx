@@ -7,7 +7,7 @@ import { TRAINING_PACE_LABELS, VDOT_DISTANCES, buildVdotModel } from "@shared/vd
 
 type AuthMode = "login" | "register";
 type PredictionMode = "distance-date" | "finish-date" | "date-finish";
-type AppView = "home" | "records" | "vdot" | "shoes";
+type AppView = "home" | "records" | "vdot" | "prediction" | "shoes";
 type VolumeChartMode = "weekly" | "monthly";
 type HistoryMonth = {
   month: string;
@@ -191,6 +191,20 @@ function parsePace(value: string): number {
     return parts[0] * 60 + parts[1];
   }
   return parseNumber(value, 0);
+}
+
+function normalizeClockInput(value: string): string {
+  const compact = value.trim().replace(/\s/g, "");
+  if (!compact || compact.includes(":") || !/^\d+$/.test(compact) || compact.length <= 2) {
+    return value.trim();
+  }
+  if (compact.length <= 4) {
+    return `${compact.slice(0, -2)}:${compact.slice(-2)}`;
+  }
+  if (compact.length <= 6) {
+    return `${compact.slice(0, -4)}:${compact.slice(-4, -2)}:${compact.slice(-2)}`;
+  }
+  return value.trim();
 }
 
 function formatPace(seconds: number): string {
@@ -719,7 +733,13 @@ function AuthDialog({ onAuthed }: { onAuthed: (user: PublicUser) => void }) {
         </label>
         <label>
           密码
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "login" ? "current-password" : "new-password"} />
+          <input
+            type="password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            minLength={mode === "register" ? 6 : undefined}
+          />
         </label>
         {mode === "register" && (
           <label>
@@ -1287,7 +1307,7 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
       },
       grid: isNarrow
         ? { top: 112, left: 42, right: 38, bottom: 58, containLabel: true }
-        : { top: 70, left: 62, right: 126, bottom: 58, containLabel: true },
+        : { top: 70, left: 62, right: 166, bottom: 58, containLabel: true },
       dataZoom: xAxisZoom(dates.length, 8),
       xAxis: { type: "category", data: dates, boundaryGap: false },
       yAxis: [
@@ -1305,21 +1325,22 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
           type: "value",
           name: isNarrow ? "" : "距离 km",
           nameLocation: "middle",
-          nameGap: isNarrow ? 0 : 46,
+          nameGap: isNarrow ? 0 : 50,
           position: "right",
           min: distanceRange.min,
-          max: distanceRange.max
+          max: distanceRange.max,
+          axisLabel: { margin: 10 }
         },
         {
           type: "value",
           name: isNarrow ? "" : "心率 bpm",
           nameLocation: "middle",
-          nameGap: isNarrow ? 0 : 48,
+          nameGap: isNarrow ? 0 : 52,
           position: "right",
-          offset: isNarrow ? 0 : 52,
+          offset: isNarrow ? 0 : 82,
           min: heartRateRange.min,
           max: heartRateRange.max,
-          axisLabel: { show: !isNarrow },
+          axisLabel: { show: !isNarrow, margin: 10 },
           axisTick: { show: !isNarrow },
           splitLine: { show: false }
         }
@@ -1978,7 +1999,13 @@ function RunForm({
           </label>
           <label>
             总用时
-            <input value={draft.duration} onChange={(event) => setField("duration", event.target.value)} placeholder="45:30 或 1:35:20" />
+            <input
+              value={draft.duration}
+              onChange={(event) => setField("duration", event.target.value)}
+              onBlur={(event) => setField("duration", normalizeClockInput(event.target.value))}
+              inputMode="numeric"
+              placeholder="4530 或 13520"
+            />
           </label>
         </div>
         <div className="form-section wide">
@@ -1986,19 +2013,25 @@ function RunForm({
           <div className="performance-grid">
             <label>
               平均配速
-              <input value={draft.avgPace} onChange={(event) => setField("avgPace", event.target.value)} placeholder="5:20" />
+              <input
+                value={draft.avgPace}
+                onChange={(event) => setField("avgPace", event.target.value)}
+                onBlur={(event) => setField("avgPace", normalizeClockInput(event.target.value))}
+                inputMode="numeric"
+                placeholder="例如 520"
+              />
             </label>
             <label>
               平均心率 bpm
-              <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="decimal" />
+              <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="numeric" />
             </label>
             <label>
               平均步频 spm
-              <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="decimal" />
+              <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="numeric" />
             </label>
             <label>
               平均功率 W
-              <input value={draft.avgPowerW} onChange={(event) => setField("avgPowerW", event.target.value)} inputMode="decimal" />
+              <input value={draft.avgPowerW} onChange={(event) => setField("avgPowerW", event.target.value)} inputMode="numeric" />
             </label>
           </div>
         </div>
@@ -2011,11 +2044,11 @@ function RunForm({
             </label>
             <label>
               湿度 %
-              <input value={draft.humidityPct} onChange={(event) => setField("humidityPct", event.target.value)} inputMode="decimal" />
+              <input value={draft.humidityPct} onChange={(event) => setField("humidityPct", event.target.value)} inputMode="numeric" />
             </label>
             <label>
               AQI
-              <input value={draft.aqi} onChange={(event) => setField("aqi", event.target.value)} inputMode="decimal" />
+              <input value={draft.aqi} onChange={(event) => setField("aqi", event.target.value)} inputMode="numeric" />
             </label>
           </div>
         </div>
@@ -2058,11 +2091,17 @@ function RunForm({
             {draft.splits.map((split, index) => (
               <div className="split-row" key={index}>
                 <strong>{index + 1}</strong>
-                <input value={split.distanceKm} onChange={(event) => setSplit(index, "distanceKm", event.target.value)} placeholder="km" />
-                <input value={split.pace} onChange={(event) => setSplit(index, "pace", event.target.value)} placeholder="配速" />
-                <input value={split.heartRateBpm} onChange={(event) => setSplit(index, "heartRateBpm", event.target.value)} placeholder="心率" />
-                <input value={split.powerW} onChange={(event) => setSplit(index, "powerW", event.target.value)} placeholder="功率" />
-                <input value={split.cadenceSpm} onChange={(event) => setSplit(index, "cadenceSpm", event.target.value)} placeholder="步频" />
+                <input value={split.distanceKm} onChange={(event) => setSplit(index, "distanceKm", event.target.value)} inputMode="decimal" placeholder="km" />
+                <input
+                  value={split.pace}
+                  onChange={(event) => setSplit(index, "pace", event.target.value)}
+                  onBlur={(event) => setSplit(index, "pace", normalizeClockInput(event.target.value))}
+                  inputMode="numeric"
+                  placeholder="配速"
+                />
+                <input value={split.heartRateBpm} onChange={(event) => setSplit(index, "heartRateBpm", event.target.value)} inputMode="numeric" placeholder="心率" />
+                <input value={split.powerW} onChange={(event) => setSplit(index, "powerW", event.target.value)} inputMode="numeric" placeholder="功率" />
+                <input value={split.cadenceSpm} onChange={(event) => setSplit(index, "cadenceSpm", event.target.value)} inputMode="numeric" placeholder="步频" />
                 <button type="button" className="ghost-button small-button danger-button split-delete-button" onClick={() => removeSplit(index)}>
                   删除
                 </button>
@@ -2121,6 +2160,27 @@ function ShoeLibrary({
       totals.set(run.shoeId, (totals.get(run.shoeId) ?? 0) + run.distanceKm);
     }
     return totals;
+  }, [runs]);
+
+  const runCountByShoe = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const run of runs) {
+      if (!run.shoeId) continue;
+      counts.set(run.shoeId, (counts.get(run.shoeId) ?? 0) + 1);
+    }
+    return counts;
+  }, [runs]);
+
+  const lastRunByShoe = useMemo(() => {
+    const dates = new Map<string, string>();
+    for (const run of runs) {
+      if (!run.shoeId) continue;
+      const date = run.dateTime.slice(0, 10);
+      if (!dates.has(run.shoeId) || date > dates.get(run.shoeId)!) {
+        dates.set(run.shoeId, date);
+      }
+    }
+    return dates;
   }, [runs]);
 
   async function submit(event: React.FormEvent) {
@@ -2185,11 +2245,14 @@ function ShoeLibrary({
             <p className="eyebrow">Shoe Library</p>
             <h2>{editingShoe ? "编辑跑鞋" : "鞋库"}</h2>
           </div>
-          {editingShoe && (
-            <button type="button" className="ghost-button" onClick={cancelEdit}>
-              取消编辑
-            </button>
-          )}
+          <div className="shoe-library-actions">
+            <span className="shoe-count">{shoes.length} 双跑鞋</span>
+            {editingShoe && (
+              <button type="button" className="ghost-button" onClick={cancelEdit}>
+                取消编辑
+              </button>
+            )}
+          </div>
         </div>
         <form className="shoe-form" onSubmit={submit}>
           <label>
@@ -2213,6 +2276,8 @@ function ShoeLibrary({
       <section className="shoe-grid">
         {shoes.map((shoe) => {
           const usedKm = mileageByShoe.get(shoe.id) ?? 0;
+          const runCount = runCountByShoe.get(shoe.id) ?? 0;
+          const lastRunDate = lastRunByShoe.get(shoe.id) ?? "-";
           const imageSrc = shoePhotoSrc(shoe);
           return (
             <article className="shoe-card" key={shoe.id}>
@@ -2225,18 +2290,31 @@ function ShoeLibrary({
                     <p className="eyebrow">Running Shoe</p>
                     <h3>{shoe.name}</h3>
                   </div>
-                  <div className="shoe-actions">
-                    <button type="button" className="ghost-button small-button" onClick={() => setEditingShoe(shoe)}>
-                      编辑
-                    </button>
-                    <button type="button" className="ghost-button small-button danger-button" onClick={() => removeShoe(shoe)}>
-                      删除
-                    </button>
+                </div>
+                <div className="shoe-performance-strip">
+                  <div className="shoe-mileage">
+                    <span>累计跑量</span>
+                    <strong>{formatKm(usedKm)} km</strong>
+                  </div>
+                  <div className="shoe-run-count">
+                    <span>关联跑步</span>
+                    <strong>{runCount} 次</strong>
+                  </div>
+                  <div className="shoe-last-run">
+                    <span>最近使用</span>
+                    <strong>{lastRunDate}</strong>
                   </div>
                 </div>
-                <div className="shoe-mileage">
-                  <span>累计跑量</span>
-                  <strong>{formatKm(usedKm)} km</strong>
+                <div className="shoe-mileage-line" aria-hidden="true">
+                  <span className={usedKm > 0 ? "has-mileage" : ""} />
+                </div>
+                <div className="shoe-actions">
+                  <button type="button" className="ghost-button small-button" onClick={() => setEditingShoe(shoe)}>
+                    编辑
+                  </button>
+                  <button type="button" className="ghost-button small-button danger-button" onClick={() => removeShoe(shoe)}>
+                    删除
+                  </button>
                 </div>
               </div>
             </article>
@@ -2604,9 +2682,15 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Running Platform</p>
-          <h1>RUNNING PLATFORM</h1>
+        <div className="topbar-main">
+          <div className="brand-lockup">
+            <span className="brand-mark" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <h1>RUNNING PLATFORM</h1>
+          </div>
           <nav className="view-tabs" aria-label="页面切换">
             <button
               type="button"
@@ -2634,6 +2718,14 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             </button>
             <button
               type="button"
+              className={activeView === "prediction" ? "active" : ""}
+              onClick={() => setActiveView("prediction")}
+              aria-current={activeView === "prediction" ? "page" : undefined}
+            >
+              预测建议
+            </button>
+            <button
+              type="button"
               className={activeView === "shoes" ? "active" : ""}
               onClick={() => setActiveView("shoes")}
               aria-current={activeView === "shoes" ? "page" : undefined}
@@ -2643,68 +2735,15 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
           </nav>
         </div>
         <div className="user-actions">
-          <span>{user.username}</span>
+          <span className="user-avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>
+          <span className="user-name">{user.username}</span>
           <button className="ghost-button" onClick={onLogout}>退出</button>
         </div>
       </header>
 
       {activeView === "home" && (
-        <>
-          <section className="hero-grid">
-            <div className="chart-panel">
-              <div className="panel-heading chart-heading">
-                <div>
-                  <p className="eyebrow">Trend Model</p>
-                  <h2>跑步表现与训练负荷</h2>
-                </div>
-                <form className="target-controls" onSubmit={applyPredictionTarget}>
-                  <label className="target-input">
-                    预测模式
-                    <select value={predictionMode} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
-                      <option value="distance-date">只看距离达成日期</option>
-                      <option value="finish-date">目标距离 + 完赛时间</option>
-                      <option value="date-finish">目标距离 + 达成日期</option>
-                    </select>
-                  </label>
-                  <label className="target-input">
-                    目标距离 km
-                    <input
-                      inputMode="decimal"
-                      value={targetDistanceInput}
-                      onChange={(event) => setTargetDistanceInput(event.target.value)}
-                    />
-                  </label>
-                  {predictionMode === "finish-date" && (
-                    <label className="target-input">
-                      目标完赛
-                      <input value={targetFinishInput} onChange={(event) => setTargetFinishInput(event.target.value)} placeholder="2:00:00" />
-                    </label>
-                  )}
-                  {predictionMode === "date-finish" && (
-                    <label className="target-input">
-                      目标日期
-                      <input type="date" value={targetDateInput} onChange={(event) => setTargetDateInput(event.target.value)} />
-                    </label>
-                  )}
-                  <div className="target-apply">
-                    <button type="submit" className="primary-button small-primary">
-                      更新预测
-                    </button>
-                    {targetIsDirty && <span>未应用</span>}
-                  </div>
-                  {targetError && <p className="target-error">{targetError}</p>}
-                </form>
-              </div>
-              {runs.length || weights.length ? (
-                <IndependentResearchCharts runs={runs} weights={weights} />
-              ) : (
-                <div className="empty-chart">保存跑步或体重记录后显示趋势图。</div>
-              )}
-            </div>
-            <PredictionPanel prediction={prediction} mode={appliedPredictionMode} />
-          </section>
-
-          <section className="summary-grid">
+        <section className="home-dashboard">
+          <section className="summary-grid" aria-label="跑步数据概览">
             <div className="metric-card">
               <span>累计距离</span>
               <strong>{summary.totalDistance.toFixed(1)} km</strong>
@@ -2722,7 +2761,68 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               <strong>{runs.length}</strong>
             </div>
           </section>
-        </>
+
+          <section className="hero-grid">
+            <div className="chart-panel">
+              <div className="panel-heading chart-heading">
+                <div>
+                  <p className="eyebrow">Trend Model</p>
+                  <h2>跑步表现与训练负荷</h2>
+                </div>
+              </div>
+              {runs.length || weights.length ? (
+                <IndependentResearchCharts runs={runs} weights={weights} />
+              ) : (
+                <div className="empty-chart">保存跑步或体重记录后显示趋势图。</div>
+              )}
+            </div>
+          </section>
+        </section>
+      )}
+
+      {activeView === "prediction" && (
+        <section className="prediction-page">
+          <section className="panel prediction-control-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="eyebrow">Prediction Workspace</p>
+                <h2>目标预测与训练建议</h2>
+              </div>
+            </div>
+            <form className="target-controls" onSubmit={applyPredictionTarget}>
+              <label className="target-input">
+                预测模式
+                <select value={predictionMode} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
+                  <option value="distance-date">只看距离达成日期</option>
+                  <option value="finish-date">目标距离 + 完赛时间</option>
+                  <option value="date-finish">目标距离 + 达成日期</option>
+                </select>
+              </label>
+              <label className="target-input">
+                目标距离 km
+                <input inputMode="decimal" value={targetDistanceInput} onChange={(event) => setTargetDistanceInput(event.target.value)} />
+              </label>
+              {predictionMode === "finish-date" && (
+                <label className="target-input">
+                  目标完赛
+                  <input value={targetFinishInput} onChange={(event) => setTargetFinishInput(event.target.value)} placeholder="2:00:00" />
+                </label>
+              )}
+              {predictionMode === "date-finish" && (
+                <label className="target-input">
+                  目标日期
+                  <input type="date" value={targetDateInput} onChange={(event) => setTargetDateInput(event.target.value)} />
+                </label>
+              )}
+              <div className="target-apply">
+                <button type="submit" className="primary-button small-primary">更新预测</button>
+                {targetIsDirty && <span>未应用</span>}
+              </div>
+              {targetError && <p className="target-error">{targetError}</p>}
+            </form>
+          </section>
+          <PredictionPanel prediction={prediction} mode={appliedPredictionMode} />
+        </section>
       )}
 
       {activeView === "records" && (

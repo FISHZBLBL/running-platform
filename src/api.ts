@@ -96,7 +96,8 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
     const password = String(jsonBody.password ?? "");
     const inviteCode = String(jsonBody.inviteCode ?? "");
     if (!username || !password) throw new Error("请输入用户名和密码。");
-    if (inviteCode !== "FISH_Z") throw new Error("邀请码不正确。");
+    if (inviteCode !== "local-preview-only") throw new Error("本地预览邀请码不正确。");
+    if (password.length < 6) throw new Error("密码至少需要 6 位。");
     if (state.users.some((user) => user.username === username)) throw new Error("用户名已存在。");
     state.users.push({ username, password });
     state.sessionUsername = username;

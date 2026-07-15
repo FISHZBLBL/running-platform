@@ -4,10 +4,15 @@ import { requireUsername } from "./_shared/auth";
 import { errorResponse, json, methodNotAllowed } from "./_shared/responses";
 import { storage } from "./_shared/storage";
 
-function extensionFromName(name: string): string {
-  const match = name.match(/\.([a-zA-Z0-9]+)$/);
-  return match?.[1] ?? "png";
-}
+const MAX_FILES_PER_REQUEST = 6;
+const MAX_TOTAL_BYTES = 4 * 1024 * 1024;
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "image/heif": "heif"
+};
 
 export default async function uploads(req: Request): Promise<Response> {
   try {
@@ -22,12 +27,20 @@ export default async function uploads(req: Request): Promise<Response> {
     if (files.length === 0) {
       return json({ error: "At least one screenshot is required." }, { status: 400 });
     }
+    if (files.length > MAX_FILES_PER_REQUEST) {
+      return json({ error: `每次最多上传 ${MAX_FILES_PER_REQUEST} 张截图。` }, { status: 413 });
+    }
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      return json({ error: "本次截图总大小不能超过 4 MB。" }, { status: 413 });
+    }
     const keys: string[] = [];
     for (const file of files) {
-      if (!file.type.startsWith("image/")) {
-        return json({ error: "Only image files are accepted." }, { status: 400 });
+      const extension = IMAGE_EXTENSIONS[file.type.toLowerCase()];
+      if (!extension) {
+        return json({ error: "仅支持 JPG、PNG、WebP、HEIC 或 HEIF 图片。" }, { status: 400 });
       }
-      const key = screenshotKey(username, runId, crypto.randomUUID(), extensionFromName(file.name));
+      const key = screenshotKey(username, runId, crypto.randomUUID(), extension);
       await storage().putFile(key, {
         body: Buffer.from(await file.arrayBuffer()),
         contentType: file.type || "application/octet-stream"
@@ -41,5 +54,10 @@ export default async function uploads(req: Request): Promise<Response> {
 }
 
 export const config: Config = {
-  path: "/api/uploads"
-};
+  path: "/api/uploads",
+  rateLimit: {
+    windowLimit: 12,
+    windowSize: 60,
+    aggregateBy: ["ip", "domain"]
+  }
+} as Config;
