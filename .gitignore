@@ -10,3 +10,6 @@ npm-debug.log*
 coverage/
 tsconfig.tsbuildinfo
 backups/
+public/local-preview-runs.json
+public/local-preview-shoes.json
+public/local-preview-weights.json

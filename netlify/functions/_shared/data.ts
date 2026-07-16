@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   keepKey,
   profileKey,
+  runnerProfileKey,
   runKey,
   runsIndexKey,
   runsPrefix,
@@ -12,7 +13,7 @@ import {
   weightsIndexKey,
   weightsPrefix
 } from "../../../shared/cosKeys";
-import type { RunningRecord, RunningShoe, UserProfile, WeightRecord } from "../../../shared/types";
+import type { RunnerProfile, RunningRecord, RunningShoe, UserProfile, WeightRecord } from "../../../shared/types";
 import { storage } from "./storage";
 
 const INDEX_LOCK_STALE_MS = 90_000;
@@ -135,6 +136,14 @@ export async function createProfile(profile: UserProfile): Promise<boolean> {
 export async function saveProfile(profile: UserProfile): Promise<void> {
   await writeJson(profileKey(profile.username), profile);
   await storage().putText(keepKey(profile.username), "");
+}
+
+export async function getRunnerProfile(username: string): Promise<RunnerProfile | null> {
+  return readJson<RunnerProfile>(runnerProfileKey(username));
+}
+
+export async function saveRunnerProfile(username: string, profile: RunnerProfile): Promise<void> {
+  await writeJson(runnerProfileKey(username), profile);
 }
 
 export async function listRuns(username: string): Promise<RunningRecord[]> {

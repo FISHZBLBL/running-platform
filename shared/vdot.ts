@@ -37,6 +37,8 @@ export type VdotModel = {
   table: VdotTableRow[];
 };
 
+export type StandardDistancePerformance = VdotPersonalBest;
+
 export const VDOT_DISTANCES: VdotDistance[] = [
   { key: "1500m", label: "1500m", distanceKm: 1.5, pbMinKm: 1.5, pbMaxKm: 1.6 },
   { key: "3km", label: "3km", distanceKm: 3, pbMinKm: 3, pbMaxKm: 3.5 },
@@ -114,23 +116,92 @@ export function trainingPacesFromVdot(vdot: number): Record<TrainingPaceKey, num
   ) as Record<TrainingPaceKey, number>;
 }
 
+function splitElapsedAtDistance(run: RunningRecord, distanceKm: number): number | null {
+  if (!Number.isFinite(distanceKm) || distanceKm < 0) return null;
+  let coveredKm = 0;
+  let elapsedSec = 0;
+  for (const split of run.splits ?? []) {
+    if (!Number.isFinite(split.distanceKm) || split.distanceKm <= 0 || !Number.isFinite(split.paceSecPerKm) || split.paceSecPerKm <= 0) {
+      continue;
+    }
+    if (coveredKm + split.distanceKm >= distanceKm) {
+      return elapsedSec + (distanceKm - coveredKm) * split.paceSecPerKm;
+    }
+    coveredKm += split.distanceKm;
+    elapsedSec += split.distanceKm * split.paceSecPerKm;
+  }
+  return Math.abs(coveredKm - distanceKm) < 1e-6 ? elapsedSec : null;
+}
+
+export function isWithinStandardDistanceTolerance(recordedDistanceKm: number, targetDistanceKm: number): boolean {
+  const minimumDistance = targetDistanceKm - Math.max(0.03, targetDistanceKm * 0.02);
+  const maximumDistance = targetDistanceKm + Math.max(0.05, targetDistanceKm * 0.03);
+  return recordedDistanceKm >= minimumDistance - 1e-6 && recordedDistanceKm <= maximumDistance + 1e-6;
+}
+
+function fastestSplitDuration(run: RunningRecord, targetDistanceKm: number): number | null {
+  const boundaries = [0];
+  let coveredKm = 0;
+  for (const split of run.splits ?? []) {
+    if (!Number.isFinite(split.distanceKm) || split.distanceKm <= 0 || !Number.isFinite(split.paceSecPerKm) || split.paceSecPerKm <= 0) {
+      continue;
+    }
+    coveredKm += split.distanceKm;
+    boundaries.push(coveredKm);
+  }
+  if (coveredKm + 1e-6 < targetDistanceKm) return null;
+
+  const starts = new Set<number>([0]);
+  for (const boundary of boundaries) {
+    if (boundary <= coveredKm - targetDistanceKm + 1e-6) starts.add(Math.max(0, boundary));
+    const shifted = boundary - targetDistanceKm;
+    if (shifted >= -1e-6 && shifted <= coveredKm - targetDistanceKm + 1e-6) starts.add(Math.max(0, shifted));
+  }
+
+  let fastest: number | null = null;
+  for (const startKm of starts) {
+    const startSec = splitElapsedAtDistance(run, startKm);
+    const finishSec = splitElapsedAtDistance(run, startKm + targetDistanceKm);
+    if (startSec === null || finishSec === null) continue;
+    const durationSec = finishSec - startSec;
+    if (durationSec > 0 && (fastest === null || durationSec < fastest)) fastest = durationSec;
+  }
+  return fastest;
+}
+
+function wholeRunDurationAtDistance(run: RunningRecord, targetDistanceKm: number): number | null {
+  if (!isWithinStandardDistanceTolerance(run.distanceKm, targetDistanceKm)) return null;
+  const paceSecPerKm = run.avgPaceSecPerKm > 0
+    ? run.avgPaceSecPerKm
+    : run.durationSec > 0 && run.distanceKm > 0
+      ? run.durationSec / run.distanceKm
+      : null;
+  return paceSecPerKm && Number.isFinite(paceSecPerKm) ? paceSecPerKm * targetDistanceKm : null;
+}
+
+export function standardDistancePerformancesForRun(run: RunningRecord): StandardDistancePerformance[] {
+  return VDOT_DISTANCES.flatMap((distance) => {
+    const estimatedDurationSec = fastestSplitDuration(run, distance.distanceKm)
+      ?? wholeRunDurationAtDistance(run, distance.distanceKm);
+    if (estimatedDurationSec === null || !Number.isFinite(estimatedDurationSec) || estimatedDurationSec <= 0) return [];
+    return [{
+      key: distance.key,
+      label: distance.label,
+      distanceKm: distance.distanceKm,
+      sourceRunId: run.id,
+      sourceDate: run.dateTime.slice(0, 10),
+      sourceDistanceKm: run.distanceKm,
+      estimatedDurationSec,
+      paceSecPerKm: estimatedDurationSec / distance.distanceKm,
+      vdot: vdotFromPerformance(distance.distanceKm, estimatedDurationSec)
+    }];
+  });
+}
+
 function bestPerformanceForDistance(runs: RunningRecord[], distance: VdotDistance): VdotPersonalBest | null {
   const candidates = runs
-    .filter((run) => run.distanceKm >= distance.pbMinKm && run.distanceKm < distance.pbMaxKm)
-    .map((run) => {
-      const estimatedDurationSec = run.avgPaceSecPerKm * distance.distanceKm;
-      return {
-        key: distance.key,
-        label: distance.label,
-        distanceKm: distance.distanceKm,
-        sourceRunId: run.id,
-        sourceDate: run.dateTime.slice(0, 10),
-        sourceDistanceKm: run.distanceKm,
-        estimatedDurationSec,
-        paceSecPerKm: estimatedDurationSec / distance.distanceKm,
-        vdot: vdotFromPerformance(distance.distanceKm, estimatedDurationSec)
-      };
-    })
+    .flatMap(standardDistancePerformancesForRun)
+    .filter((candidate) => candidate.key === distance.key)
     .sort((a, b) => a.estimatedDurationSec - b.estimatedDurationSec);
   return candidates[0] ?? null;
 }

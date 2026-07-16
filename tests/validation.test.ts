@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { keepKey, profileKey, runKey, screenshotKey, shoeKey, shoePhotoKey, weightKey } from "../shared/cosKeys";
-import { validateRunPayload, validateShoePayload, validateWeightPayload } from "../shared/validation";
+import { keepKey, profileKey, runKey, runnerProfileKey, screenshotKey, shoeKey, shoePhotoKey, weightKey } from "../shared/cosKeys";
+import { validateRunPayload, validateRunnerProfilePayload, validateShoePayload, validateWeightPayload } from "../shared/validation";
 
 describe("cos key helpers", () => {
   it("generates stable user scoped keys", () => {
     expect(profileKey("fish")).toBe("users/fish/profile.json");
+    expect(runnerProfileKey("fish")).toBe("users/fish/runner-profile.json");
     expect(keepKey("fish")).toBe("users/fish/.keep");
     expect(runKey("fish", "run-1")).toBe("users/fish/runs/run-1.json");
     expect(shoeKey("fish", "shoe-1")).toBe("users/fish/shoes/shoe-1.json");
@@ -25,6 +26,10 @@ describe("validation", () => {
       avgPowerW: 190,
       avgCadenceSpm: 172,
       avgHeartRateBpm: 150,
+      effortScore: 8,
+      effortSource: "apple-watch",
+      performanceType: "race",
+      elevationGainM: 120,
       weather: { temperatureC: 15, humidityPct: 40, aqi: 35 },
       notes: "  后半程感觉稳定  ",
       splits: [],
@@ -34,6 +39,23 @@ describe("validation", () => {
     expect(run.shoeId).toBe("shoe-1");
     expect(run.screenshotKeys).toEqual(["key"]);
     expect(run.notes).toBe("后半程感觉稳定");
+    expect(run.effortScore).toBe(8);
+    expect(run.effortSource).toBe("apple-watch");
+    expect(run.performanceType).toBe("race");
+    expect(run.elevationGainM).toBe(120);
+  });
+
+  it("normalizes a runner profile", () => {
+    const profile = validateRunnerProfilePayload({
+      birthDate: "1995-04-20",
+      sex: "male",
+      heightCm: 175,
+      restingHeartRateBpm: 55,
+      measuredMaxHeartRateBpm: 192
+    });
+    expect(profile.birthDate).toBe("1995-04-20");
+    expect(profile.restingHeartRateBpm).toBe(55);
+    expect(profile.measuredMaxHeartRateBpm).toBe(192);
   });
 
   it("normalizes a running shoe payload", () => {

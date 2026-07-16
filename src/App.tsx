@@ -1,8 +1,26 @@
 import * as echarts from "echarts";
 import { Component, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
-import { buildPrediction } from "@shared/predictions";
-import type { PredictionResult, PublicUser, RunningRecord, RunningShoe, RunSplit, WeightRecord } from "@shared/types";
+import {
+  extractRunDraftFromText as extractRunDraftFromOcrText,
+  extractSplitsFromText as extractSplitsFromOcrText,
+  getRunOcrWarnings,
+  type SplitDraft,
+  type SplitOcrResult
+} from "./ocr";
+import { buildHeartRateBaseline, type HeartRateBaseline } from "@shared/physiology";
+import { buildPrediction, buildPredictionBacktest } from "@shared/predictions";
+import type {
+  PredictionBacktestResult,
+  PredictionResult,
+  PublicUser,
+  RunnerProfile,
+  RunnerSex,
+  RunningRecord,
+  RunningShoe,
+  RunSplit,
+  WeightRecord
+} from "@shared/types";
 import { TRAINING_PACE_LABELS, VDOT_DISTANCES, buildVdotModel } from "@shared/vdot";
 
 type AuthMode = "login" | "register";
@@ -15,21 +33,6 @@ type HistoryMonth = {
   weights: WeightRecord[];
 };
 
-type SplitDraft = {
-  distanceKm: string;
-  pace: string;
-  heartRateBpm: string;
-  powerW: string;
-  cadenceSpm: string;
-};
-
-type SplitOcrResult = {
-  splits: SplitDraft[];
-  detectedCount: number;
-  fullSplitCount: number;
-  droppedIndexes: number[];
-};
-
 type RunDraft = {
   id: string;
   dateTime: string;
@@ -40,12 +43,21 @@ type RunDraft = {
   avgPowerW: string;
   avgCadenceSpm: string;
   avgHeartRateBpm: string;
+  effortScore: string;
+  performanceType: "" | "race";
+  elevationGainM: string;
   temperatureC: string;
   humidityPct: string;
   aqi: string;
   notes: string;
   splits: SplitDraft[];
   screenshotKeys: string[];
+};
+
+type RunnerProfileDraft = {
+  birthDate: string;
+  sex: RunnerSex | "";
+  heightCm: string;
 };
 
 type TextDetectionResult = {
@@ -123,6 +135,9 @@ function newRunDraft(): RunDraft {
     avgPowerW: "",
     avgCadenceSpm: "",
     avgHeartRateBpm: "",
+    effortScore: "",
+    performanceType: "",
+    elevationGainM: "",
     temperatureC: "",
     humidityPct: "",
     aqi: "",
@@ -145,6 +160,9 @@ function draftFromRun(run: RunningRecord): RunDraft {
     avgPowerW: String(run.avgPowerW),
     avgCadenceSpm: String(run.avgCadenceSpm),
     avgHeartRateBpm: String(run.avgHeartRateBpm),
+    effortScore: run.effortScore === null || run.effortScore === undefined ? "" : String(run.effortScore),
+    performanceType: run.performanceType === "race" ? "race" : "",
+    elevationGainM: run.elevationGainM === null || run.elevationGainM === undefined ? "" : String(run.elevationGainM),
     temperatureC: run.weather.temperatureC === null ? "" : String(run.weather.temperatureC),
     humidityPct: run.weather.humidityPct === null ? "" : String(run.weather.humidityPct),
     aqi: run.weather.aqi === null ? "" : String(run.weather.aqi),
@@ -618,7 +636,8 @@ function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrR
     splits,
     detectedCount: detectedIndexes.length,
     fullSplitCount,
-    droppedIndexes
+    droppedIndexes,
+    incompleteIndexes: []
   };
 }
 
@@ -660,7 +679,7 @@ async function detectTextFromImages(files: File[]): Promise<string> {
   const worker = await createWorker(["eng", "chi_sim"]);
   try {
     await worker.setParameters({
-      tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
       preserve_interword_spaces: "1"
     });
     for (const file of files) {
@@ -1639,7 +1658,17 @@ function IndependentResearchCharts({ runs, weights }: { runs: RunningRecord[]; w
   );
 }
 
-function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | null; mode: PredictionMode }) {
+function PredictionPanel({
+  prediction,
+  mode,
+  backtest,
+  baseline
+}: {
+  prediction: PredictionResult | null;
+  mode: PredictionMode;
+  backtest: PredictionBacktestResult;
+  baseline: HeartRateBaseline;
+}) {
   if (!prediction) {
     return <div className="panel muted-panel">等待预测数据...</div>;
   }
@@ -1666,53 +1695,368 @@ function PredictionPanel({ prediction, mode }: { prediction: PredictionResult | 
   const vdotFinishText = prediction.vdotPredictedFinishRangeSec
     ? `${formatDuration(prediction.vdotPredictedFinishRangeSec.fastest)} - ${formatDuration(prediction.vdotPredictedFinishRangeSec.conservative)}`
     : "-";
+  const smart = prediction.smartPrediction;
+  const smartConfidence = smart
+    ? `${smart.confidence === "high" ? "高" : smart.confidence === "medium" ? "中" : "低"}可信 · ${smart.confidenceScore}/100`
+    : "数据不足";
+  const smartFinishText = smart ? formatDuration(smart.predictedFinishSec) : vdotFinishText;
+  const coveragePercent = prediction.targetDistanceKm > 0
+    ? Math.min(100, Math.round((prediction.longestDistanceKm / prediction.targetDistanceKm) * 100))
+    : 0;
+  const currentMarkerPosition = Math.min(96, Math.max(5, coveragePercent));
+  const loadFactor = smart?.factors.find((factor) => factor.key === "training-load");
+  const loadMatch = loadFactor?.detail.match(/最近 7 天负荷\s*([\d.]+).*?负荷比\s*([\d.]+)/);
+  const loadSummary = loadMatch
+    ? `${loadMatch[1]} · 比值 ${loadMatch[2]}`
+    : loadFactor
+      ? signedPercent(loadFactor.impactPercent)
+      : "数据不足";
+  const smartError = backtest.smartMetrics?.meanAbsolutePercentageError ?? null;
+  const vdotError = backtest.vdotMetrics?.meanAbsolutePercentageError ?? null;
+  const improvement = backtest.smartImprovementPercent;
+  const errorScale = Math.max(vdotError ?? 0, smartError ?? 0, 1);
+  const actionable = prediction.recommendations.filter((item) => /训练|跑量|节奏|长距离|恢复|配速|距离/.test(item));
+  const trainingRecommendations = [...new Set([...actionable, ...prediction.recommendations])].slice(0, 3);
+  const confidenceLabel = smart
+    ? smart.confidence === "high"
+      ? "高可信"
+      : smart.confidence === "medium"
+        ? "中可信"
+        : "低可信"
+    : "数据不足";
   return (
-    <section className="panel prediction-panel">
-      <div className="prediction-hero">
+    <section className="panel prediction-panel prediction-fusion-panel">
+      <div className="prediction-core">
+        <div className="prediction-core-main">
+          <div className="prediction-forecast">
+            <div>
+              <span>智能综合预测</span>
+              <strong>{smartFinishText}</strong>
+              <small>{primaryLabel}：{primaryValue}</small>
+            </div>
+            <div className="prediction-target-summary">
+              <span>目标距离</span>
+              <strong>{prediction.targetDistanceKm.toFixed(1)} km</strong>
+              <small>当前最长 {prediction.longestDistanceKm.toFixed(1)} km</small>
+            </div>
+          </div>
+          <div className="prediction-key-metrics">
+            <div><span>速度能力</span><strong>VDOT {vdotRangeText}</strong></div>
+            <div><span>距离准备</span><strong>目标覆盖 {coveragePercent}%</strong></div>
+            <div>
+              <span>近期负荷</span>
+              <strong>{loadSummary}</strong>
+              {loadFactor && <small>{signedPercent(loadFactor.impactPercent)} 调整</small>}
+            </div>
+            <div>
+              <span>历史回测</span>
+              <strong>{smartError === null ? "数据不足" : `误差 ${smartError.toFixed(1)}%`}</strong>
+              {improvement !== null && <small>改善 {signedPercent(improvement)}</small>}
+            </div>
+          </div>
+        </div>
+        <div className="prediction-confidence" aria-label={`模型可信度 ${smart?.confidenceScore ?? 0} 分，${confidenceLabel}`}>
+          <div className="prediction-confidence-ring">
+            <svg viewBox="0 0 44 44" aria-hidden="true">
+              <circle className="confidence-track" cx="22" cy="22" r="18" pathLength="100" />
+              <circle
+                className="confidence-value"
+                cx="22"
+                cy="22"
+                r="18"
+                pathLength="100"
+                style={{ strokeDasharray: `${smart?.confidenceScore ?? 0} 100` }}
+              />
+            </svg>
+            <strong>{smart?.confidenceScore ?? "-"}</strong>
+          </div>
+          <span>模型可信度 / 100</span>
+          <small>{confidenceLabel}</small>
+          {smart && smart.calibrationSampleCount > 0 && <small>个人模型强度 {Math.round(smart.calibrationStrengthPercent)}%</small>}
+        </div>
+      </div>
+
+      <div className="prediction-roadmap">
+        <div className="prediction-section-heading">
+          <h3>{prediction.targetDistanceKm >= 20 ? "半程马拉松达标路线" : `${prediction.targetDistanceKm.toFixed(1)} km 达标路线`}</h3>
+          <span>从当前最长距离逐步建立目标完赛能力</span>
+        </div>
+        <div className="roadmap-line" aria-label={`当前最长 ${prediction.longestDistanceKm.toFixed(1)} km，目标 ${prediction.targetDistanceKm.toFixed(1)} km，覆盖 ${coveragePercent}%`}>
+          <i className="roadmap-progress" style={{ width: `${coveragePercent}%` }} />
+          <span className="roadmap-marker roadmap-start"><i /><b>训练起点</b><small>持续记录</small></span>
+          <span className="roadmap-marker roadmap-current" style={{ left: `${currentMarkerPosition}%` }}><i /><b>当前 {prediction.longestDistanceKm.toFixed(1)} km</b><small>覆盖 {coveragePercent}%</small></span>
+          <span className="roadmap-marker roadmap-goal"><i /><b>目标 {prediction.targetDistanceKm.toFixed(1)} km</b><small>{primaryValue}</small></span>
+        </div>
+      </div>
+
+      <div className="prediction-lower-grid">
+        <div className="prediction-analysis-grid">
+          <section className="prediction-factor-sheet">
+            <div className="prediction-section-heading compact-heading">
+              <h3>智能模型影响因素</h3><span>{smartConfidence}</span>
+            </div>
+            {smart ? (
+              <div className="prediction-factor-bars">
+                {smart.factors.map((factor) => {
+                  const barWidth = factor.impactPercent === 0 ? 24 : Math.min(100, Math.max(16, Math.abs(factor.impactPercent) * 8));
+                  const impactLabel = factor.impactPercent === 0 ? "权重项" : signedPercent(factor.impactPercent);
+                  return (
+                    <details key={factor.key} className="prediction-factor-row">
+                      <summary>
+                        <span>{factor.label}</span>
+                        <i className="factor-track"><i style={{ width: `${barWidth}%` }} /></i>
+                        <strong>{impactLabel}</strong>
+                      </summary>
+                      <p>{factor.detail}</p>
+                    </details>
+                  );
+                })}
+              </div>
+            ) : <p className="muted-text">数据不足，暂时无法分析模型影响因素。</p>}
+          </section>
+
+          <section className="prediction-backtest-sheet">
+            <div className="prediction-section-heading compact-heading">
+              <h3>历史预测回测</h3><span>{backtest.status === "ready" ? `${backtest.sampleCount} 条样本` : "等待样本"}</span>
+            </div>
+            {backtest.status === "ready" ? (
+              <>
+                <div className="backtest-bars" aria-label={`原始 VDOT 误差 ${vdotError?.toFixed(1) ?? "-"}%，智能模型误差 ${smartError?.toFixed(1) ?? "-"}%`}>
+                  <div><i style={{ height: `${Math.max(22, ((vdotError ?? 0) / errorScale) * 100)}%` }}>{vdotError?.toFixed(1)}%</i><span>原始 VDOT</span></div>
+                  <div><i className="smart-bar" style={{ height: `${Math.max(22, ((smartError ?? 0) / errorScale) * 100)}%` }}>{smartError?.toFixed(1)}%</i><span>智能模型</span></div>
+                  <p>智能误差改善 <strong>{signedPercent(improvement)}</strong></p>
+                </div>
+                <div className="backtest-compact-list">
+                  {backtest.entries.slice(-3).reverse().map((entry) => (
+                    <div key={entry.runId}><span>{entry.date} · {entry.benchmarkLabel}</span><strong>实际 {formatDuration(entry.actualFinishSec)}</strong></div>
+                  ))}
+                </div>
+              </>
+            ) : <p className="muted-text">系统会使用历史 PB 与比赛记录验证预测误差。</p>}
+          </section>
+        </div>
+
+        <aside className="prediction-coach-rail">
+          <div className="prediction-section-heading compact-heading"><div><h3>下一步训练</h3><span>根据当前预测生成的行动重点</span></div></div>
+          <div className="coach-recommendations">
+            {trainingRecommendations.map((item, index) => (
+              <div key={item}><span>建议 {index + 1}</span><p>{item}</p></div>
+            ))}
+          </div>
+          {prediction.warnings.length > 0 && (
+            <div className="coach-warning-list">{prediction.warnings.map((item) => <p key={item}>{item}</p>)}</div>
+          )}
+          <div className="coach-heart-zones">
+            <div className="prediction-section-heading compact-heading"><h3>心率分区</h3><span>{baseline.effectiveMaxHeartRateBpm ? `最大心率 ${baseline.effectiveMaxHeartRateBpm}` : "待补充出生日期"}</span></div>
+            {baseline.zones.length > 0 ? (
+              <div className="coach-zone-strip">
+                {baseline.zones.map((zone) => <div key={zone.zone} className={`zone-${zone.zone}`}><span>Z{zone.zone}</span><strong>{zone.minBpm}-{zone.maxBpm}</strong></div>)}
+              </div>
+            ) : <p className="muted-text">填写出生日期后自动生成心率分区。</p>}
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function runnerProfileDraft(profile: RunnerProfile | null): RunnerProfileDraft {
+  return {
+    birthDate: profile?.birthDate ?? "",
+    sex: profile?.sex ?? "",
+    heightCm: profile?.heightCm === null || profile?.heightCm === undefined ? "" : String(profile.heightCm)
+  };
+}
+
+function nullableDraftNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function RunnerProfileMenu({
+  username,
+  profile,
+  onSaved
+}: {
+  username: string;
+  profile: RunnerProfile | null;
+  onSaved: (profile: RunnerProfile) => void;
+}) {
+  const [draft, setDraft] = useState<RunnerProfileDraft>(() => runnerProfileDraft(profile));
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setDraft(runnerProfileDraft(profile));
+  }, [profile]);
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !menuRef.current?.contains(event.target)) setOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  function setField<K extends keyof RunnerProfileDraft>(key: K, value: RunnerProfileDraft[K]) {
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      const now = new Date().toISOString();
+      const payload: RunnerProfile = {
+        birthDate: draft.birthDate || null,
+        sex: draft.sex || null,
+        heightCm: nullableDraftNumber(draft.heightCm),
+        restingHeartRateBpm: null,
+        measuredMaxHeartRateBpm: null,
+        createdAt: profile?.createdAt ?? now,
+        updatedAt: now
+      };
+      const saved = (await api.saveRunnerProfile(payload)).profile;
+      onSaved(saved);
+      setMessage("个人资料已保存。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存个人资料失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="profile-menu" ref={menuRef}>
+      <button
+        type="button"
+        className="profile-menu-trigger"
+        aria-expanded={open}
+        aria-controls="runner-profile-popover"
+        onClick={() => {
+          setMessage("");
+          setOpen((current) => !current);
+        }}
+      >
+        <span className="user-avatar" aria-hidden="true">{username.slice(0, 1).toUpperCase()}</span>
+        <span className="user-name">{username}</span>
+        <span className="profile-menu-caret" aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="profile-popover" id="runner-profile-popover" role="dialog" aria-label="个人资料">
+          <div className="profile-popover-heading">
+            <p className="eyebrow">Runner Profile</p>
+            <h2>个人资料</h2>
+          </div>
+          <form className="profile-popover-form" onSubmit={submit}>
+          <label>
+            出生日期
+            <input type="date" value={draft.birthDate} onChange={(event) => setField("birthDate", event.target.value)} />
+          </label>
+          <label>
+            性别
+            <select value={draft.sex} onChange={(event) => setField("sex", event.target.value as RunnerProfileDraft["sex"])}>
+              <option value="">暂不填写</option>
+              <option value="female">女</option>
+              <option value="male">男</option>
+              <option value="other">其他</option>
+              <option value="prefer-not-to-say">不愿透露</option>
+            </select>
+          </label>
+          <label>
+            身高 cm
+            <input type="number" min="100" max="250" step="0.1" inputMode="decimal" value={draft.heightCm} onChange={(event) => setField("heightCm", event.target.value)} />
+          </label>
+          <button className="primary-button" disabled={busy}>{busy ? "保存中..." : "保存个人资料"}</button>
+          {message && <p className="form-message profile-message">{message}</p>}
+        </form>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function HeartRateBaselinePanel({ baseline }: { baseline: HeartRateBaseline }) {
+  return (
+    <section className="panel heart-rate-baseline-panel">
+      <div className="panel-heading">
         <div>
-          <p className="eyebrow">{modeTitle}</p>
-          <h2>{prediction.status === "ready" ? `${prediction.targetDistanceKm.toFixed(1)} km` : "数据不足"}</h2>
+          <p className="eyebrow">Heart Rate Baseline</p>
+          <h2>公式心率分区</h2>
         </div>
-        <span>{mode === "distance-date" ? "Distance" : mode === "finish-date" ? "Time Goal" : "Race Day"}</span>
+        <span className="formula-badge">208 - 0.7 × 年龄</span>
       </div>
-      <div className="metric-grid">
-        <div className="prediction-metric primary-metric">
-          <span>{primaryLabel}</span>
-          <strong>{primaryValue}</strong>
+      <div className="heart-rate-baseline-layout">
+        <div className="estimated-max-heart-rate">
+          <span>估算最大心率</span>
+          <strong>{baseline.effectiveMaxHeartRateBpm ?? "-"}</strong>
+          <small>{baseline.effectiveMaxHeartRateBpm ? "bpm · 根据出生日期自动计算" : "在右上角个人资料中填写出生日期后生成"}</small>
         </div>
-        {mode === "distance-date" && (
-          <div className="prediction-metric">
-            <span>VDOT 估算完赛</span>
-            <strong>{vdotFinishText}</strong>
+        <div className="baseline-zones">
+          <div className="zone-header"><strong>当前心率分区</strong><span>最大心率比例</span></div>
+          <div className="zone-strip">
+            {baseline.zones.map((zone) => (
+              <div key={zone.zone} className={`zone-item zone-${zone.zone}`}>
+                <span>Z{zone.zone}</span>
+                <strong>{zone.minBpm}-{zone.maxBpm}</strong>
+              </div>
+            ))}
+            {baseline.zones.length === 0 ? <p className="muted-text">填写出生日期后自动生成心率分区。</p> : null}
           </div>
-        )}
-        <div className="prediction-metric">
-          <span>历史最长距离</span>
-          <strong>{prediction.longestDistanceKm.toFixed(1)} km</strong>
         </div>
-        <div className="prediction-metric">
-          <span>当前 VDOT 范围</span>
-          <strong>{vdotRangeText}</strong>
-        </div>
-        {mode === "finish-date" && (
-          <div className="prediction-metric">
-            <span>目标所需 VDOT</span>
-            <strong>{prediction.requiredVdotForTargetFinish ? prediction.requiredVdotForTargetFinish.toFixed(1) : "-"}</strong>
-          </div>
-        )}
       </div>
-      {prediction.warnings.length > 0 && (
-        <ul className="warning-list">
-          {prediction.warnings.map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
+    </section>
+  );
+}
+
+function signedPercent(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "-";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
+}
+
+function PredictionBacktestPanel({ backtest }: { backtest: PredictionBacktestResult }) {
+  return (
+    <section className="panel backtest-panel">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Walk-forward Backtest</p>
+          <h2>历史预测回测</h2>
+        </div>
+      </div>
+      {backtest.status === "ready" ? (
+        <>
+          <div className="backtest-metrics">
+            <div><span>PB/比赛样本</span><strong>{backtest.sampleCount}</strong></div>
+            <div><span>原始 VDOT 误差</span><strong>{backtest.vdotMetrics ? `${backtest.vdotMetrics.meanAbsolutePercentageError.toFixed(1)}%` : "-"}</strong></div>
+            <div><span>智能模型误差</span><strong>{backtest.smartMetrics ? `${backtest.smartMetrics.meanAbsolutePercentageError.toFixed(1)}%` : "-"}</strong></div>
+            <div><span>智能误差改善</span><strong>{signedPercent(backtest.smartImprovementPercent)}</strong></div>
+          </div>
+          <div className="backtest-list">
+            {backtest.entries.slice(-5).reverse().map((entry) => (
+              <div key={entry.runId}>
+                <span>{entry.date} · {entry.benchmarkLabel} · {entry.distanceKm.toFixed(1)} km</span>
+                <span>VDOT {formatDuration(entry.vdotPredictedFinishSec)}</span>
+                <span>智能 {formatDuration(entry.smartPredictedFinishSec)}</span>
+                <strong>实际 {formatDuration(entry.actualFinishSec)}</strong>
+              </div>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="empty-chart">系统会自动识别标准距离 PB，并将 PB 与比赛记录作为回测目标。每次回测只使用该日期之前的跑步数据。</div>
       )}
-      <ul className="advice-list">
-        {prediction.recommendations.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
     </section>
   );
 }
@@ -1883,6 +2227,10 @@ function RunForm({
         avgPowerW: parseNumber(draft.avgPowerW),
         avgCadenceSpm: parseNumber(draft.avgCadenceSpm),
         avgHeartRateBpm: parseNumber(draft.avgHeartRateBpm),
+        effortScore: draft.effortScore ? parseNumber(draft.effortScore) : null,
+        effortSource: draft.effortScore ? "apple-watch" : null,
+        performanceType: draft.performanceType === "race" ? "race" : null,
+        elevationGainM: draft.elevationGainM ? parseNumber(draft.elevationGainM) : null,
         weather: {
           temperatureC: draft.temperatureC ? parseNumber(draft.temperatureC) : null,
           humidityPct: draft.humidityPct ? parseNumber(draft.humidityPct) : null,
@@ -1921,10 +2269,19 @@ function RunForm({
     setMessage(window.TextDetector ? "正在使用浏览器内置识别，请稍等。" : "正在使用兼容 OCR 识别，首次加载可能需要几十秒。");
     try {
       const text = await detectTextFromImages(files);
-      const patch = extractRunDraftFromText(text);
+      const patch = extractRunDraftFromOcrText(text);
       setRecognizedText(text || "未识别到文本。");
+      if (Object.keys(patch).length === 0) {
+        setMessage("未识别到可用的跑步总览数据，请检查截图是否包含体能训练时间和距离。");
+        return;
+      }
       setDraft((current) => ({ ...current, ...patch }));
-      setMessage("已根据截图尝试预填，请检查并确认后再保存。");
+      const warnings = getRunOcrWarnings(patch);
+      setMessage(
+        warnings.length > 0
+          ? `已根据截图预填；${warnings.join("；")}。请校对后再保存。`
+          : "已识别总览数据，请校对后再保存。"
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "截图识别失败，请手动校对录入。");
     }
@@ -1943,7 +2300,7 @@ function RunForm({
     setMessage(window.TextDetector ? "正在识别单段截图，请稍等。" : "正在使用兼容 OCR 识别单段，首次加载可能需要几十秒。");
     try {
       const text = await detectTextFromImages(files);
-      const result = extractSplitsFromText(text, totalDistanceKm);
+      const result = extractSplitsFromOcrText(text, totalDistanceKm);
       setRecognizedText(text || "未识别到文本。");
       if (result.splits.length === 0) {
         setMessage("未识别到可用单段数据，请检查截图是否包含段号、配速、心率、功率或步频。");
@@ -1952,14 +2309,16 @@ function RunForm({
       setDraft((current) => ({ ...current, splits: result.splits }));
       const droppedText =
         result.droppedIndexes.length > 0 ? `已按总距离丢弃第 ${result.droppedIndexes.join("、")} 段尾段。` : "没有发现需要丢弃的尾段。";
-      setMessage(`已识别 ${result.detectedCount} 段，保留 ${result.splits.length} 段完整公里。${droppedText}`);
+      const incompleteText =
+        result.incompleteIndexes.length > 0 ? `第 ${result.incompleteIndexes.join("、")} 段有字段未可靠识别，请重点校对。` : "各保留分段字段完整。";
+      setMessage(`已识别 ${result.detectedCount} 段，保留 ${result.splits.length} 段完整公里。${droppedText}${incompleteText}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "单段截图识别失败，请手动校对录入。");
     }
   }
 
   return (
-    <section className="panel">
+    <section className="panel run-entry-panel">
       <div className="panel-heading">
         <div>
           <p className="eyebrow">Run Entry</p>
@@ -2032,6 +2391,30 @@ function RunForm({
             <label>
               平均功率 W
               <input value={draft.avgPowerW} onChange={(event) => setField("avgPowerW", event.target.value)} inputMode="numeric" />
+            </label>
+            <label>
+              Apple Watch 耗能评分
+              <input
+                type="number"
+                min="1"
+                max="10"
+                step="1"
+                value={draft.effortScore}
+                onChange={(event) => setField("effortScore", event.target.value)}
+                inputMode="numeric"
+                placeholder="1-10，可后补"
+              />
+            </label>
+            <label>
+              成绩性质
+              <select value={draft.performanceType} onChange={(event) => setField("performanceType", event.target.value as RunDraft["performanceType"])}>
+                <option value="">普通跑步</option>
+                <option value="race">比赛</option>
+              </select>
+            </label>
+            <label>
+              累计爬升 m（可选）
+              <input type="number" min="0" step="1" inputMode="numeric" value={draft.elevationGainM} onChange={(event) => setField("elevationGainM", event.target.value)} />
             </label>
           </div>
         </div>
@@ -2491,6 +2874,10 @@ function HistoryManager({
                                   <small>用时</small>
                                   <b>{formatDuration(run.durationSec)}</b>
                                 </span>
+                                <span className="history-stat">
+                                  <small>耗能评分</small>
+                                  <b>{run.effortScore ?? "-"}</b>
+                                </span>
                               </div>
                             </div>
                             <div className="record-actions">
@@ -2549,6 +2936,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [runs, setRuns] = useState<RunningRecord[]>([]);
   const [shoes, setShoes] = useState<RunningShoe[]>([]);
   const [weights, setWeights] = useState<WeightRecord[]>([]);
+  const [runnerProfile, setRunnerProfile] = useState<RunnerProfile | null>(null);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
   const [targetDistance, setTargetDistance] = useState(21.0975);
   const [targetDistanceInput, setTargetDistanceInput] = useState("21.0975");
@@ -2577,14 +2965,16 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   async function refresh() {
     setLoading(true);
-    const [runData, shoeData, weightData] = await Promise.all([
+    const [runData, shoeData, weightData, profileData] = await Promise.all([
       api.listRuns(),
       api.listShoes(),
-      api.listWeights()
+      api.listWeights(),
+      api.getRunnerProfile()
     ]);
     setRuns(sortRuns(runData.runs));
     setShoes(sortShoes(shoeData.shoes));
     setWeights(sortWeights(weightData.weights));
+    setRunnerProfile(profileData.profile);
     setLoading(false);
   }
 
@@ -2597,13 +2987,14 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       setPrediction(
         buildPrediction(runs, weights, targetDistance, {
           targetFinishSec: appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null,
-          targetDate: appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null
+          targetDate: appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null,
+          runnerProfile
         })
       );
     } catch {
       setPrediction(null);
     }
-  }, [runs, weights, targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
+  }, [runs, weights, runnerProfile, targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
 
   function upsertRun(run: RunningRecord) {
     setRuns((current) => sortRuns([run, ...current.filter((item) => item.id !== run.id)]));
@@ -2630,6 +3021,12 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     const latestWeight = weights[0]?.weightKg ?? null;
     return { totalDistance, bestPace, latestWeight };
   }, [runs, weights]);
+
+  const heartRateBaseline = useMemo(() => buildHeartRateBaseline(runnerProfile, runs), [runnerProfile, runs]);
+  const predictionBacktest = useMemo(
+    () => buildPredictionBacktest(runs, weights, { runnerProfile }),
+    [runs, weights, runnerProfile]
+  );
 
   const targetIsDirty =
     targetDistanceInput !== String(targetDistance) ||
@@ -2735,8 +3132,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
           </nav>
         </div>
         <div className="user-actions">
-          <span className="user-avatar" aria-hidden="true">{user.username.slice(0, 1).toUpperCase()}</span>
-          <span className="user-name">{user.username}</span>
+          <RunnerProfileMenu username={user.username} profile={runnerProfile} onSaved={setRunnerProfile} />
           <button className="ghost-button" onClick={onLogout}>退出</button>
         </div>
       </header>
@@ -2821,7 +3217,12 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               {targetError && <p className="target-error">{targetError}</p>}
             </form>
           </section>
-          <PredictionPanel prediction={prediction} mode={appliedPredictionMode} />
+          <PredictionPanel
+            prediction={prediction}
+            mode={appliedPredictionMode}
+            backtest={predictionBacktest}
+            baseline={heartRateBaseline}
+          />
         </section>
       )}
 

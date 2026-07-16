@@ -1,4 +1,4 @@
-import type { PredictionResult, PublicUser, RunningRecord, RunningShoe, WeightRecord } from "@shared/types";
+import type { PredictionResult, PublicUser, RunnerProfile, RunningRecord, RunningShoe, WeightRecord } from "@shared/types";
 import { buildPrediction } from "@shared/predictions";
 
 type LocalUser = PublicUser & {
@@ -7,10 +7,12 @@ type LocalUser = PublicUser & {
 
 type LocalState = {
   sessionUsername: string | null;
+  localSeedVersion: string | null;
   users: LocalUser[];
   runsByUser: Record<string, RunningRecord[]>;
   shoesByUser: Record<string, RunningShoe[]>;
   weightsByUser: Record<string, WeightRecord[]>;
+  runnerProfilesByUser: Record<string, RunnerProfile | null>;
 };
 
 const LOCAL_STATE_KEY = "running-platform-local-preview";
@@ -28,15 +30,26 @@ function isLocalPreviewHost() {
 }
 
 function readLocalState(): LocalState {
-  const fallback: LocalState = { sessionUsername: null, users: [], runsByUser: {}, shoesByUser: {}, weightsByUser: {} };
+  const fallback: LocalState = {
+    sessionUsername: null,
+    localSeedVersion: null,
+    users: [],
+    runsByUser: {},
+    shoesByUser: {},
+    weightsByUser: {},
+    runnerProfilesByUser: {}
+  };
   try {
     const parsed = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY) ?? "{}") as Partial<LocalState>;
     return {
       sessionUsername: typeof parsed.sessionUsername === "string" ? parsed.sessionUsername : null,
+      localSeedVersion: typeof parsed.localSeedVersion === "string" ? parsed.localSeedVersion : null,
       users: Array.isArray(parsed.users) ? parsed.users : [],
       runsByUser: parsed.runsByUser && typeof parsed.runsByUser === "object" ? parsed.runsByUser : {},
       shoesByUser: parsed.shoesByUser && typeof parsed.shoesByUser === "object" ? parsed.shoesByUser : {},
-      weightsByUser: parsed.weightsByUser && typeof parsed.weightsByUser === "object" ? parsed.weightsByUser : {}
+      weightsByUser: parsed.weightsByUser && typeof parsed.weightsByUser === "object" ? parsed.weightsByUser : {},
+      runnerProfilesByUser:
+        parsed.runnerProfilesByUser && typeof parsed.runnerProfilesByUser === "object" ? parsed.runnerProfilesByUser : {}
     };
   } catch {
     return fallback;
@@ -66,8 +79,41 @@ function ensureLocalPreviewSession(state: LocalState): PublicUser {
   state.runsByUser[LOCAL_PREVIEW_USERNAME] ??= [];
   state.shoesByUser[LOCAL_PREVIEW_USERNAME] ??= [];
   state.weightsByUser[LOCAL_PREVIEW_USERNAME] ??= [];
+  state.runnerProfilesByUser[LOCAL_PREVIEW_USERNAME] ??= null;
   writeLocalState(state);
   return { username: LOCAL_PREVIEW_USERNAME };
+}
+
+async function readLocalPreviewSeed<T>(path: string): Promise<T[]> {
+  const response = await fetch(path, { cache: "no-store" });
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`本地预览种子读取失败：${path}`);
+  const value = await response.json();
+  return Array.isArray(value) ? value as T[] : [];
+}
+
+async function hydrateLocalPreviewSeed(state: LocalState): Promise<void> {
+  try {
+    const [runs, shoes, weights] = await Promise.all([
+      readLocalPreviewSeed<RunningRecord>("/local-preview-runs.json"),
+      readLocalPreviewSeed<RunningShoe>("/local-preview-shoes.json"),
+      readLocalPreviewSeed<WeightRecord>("/local-preview-weights.json")
+    ]);
+    if (runs.length === 0 && shoes.length === 0 && weights.length === 0) return;
+    const latestUpdate = [...runs, ...shoes, ...weights].reduce(
+      (latest, record) => "updatedAt" in record && typeof record.updatedAt === "string" && record.updatedAt > latest ? record.updatedAt : latest,
+      ""
+    );
+    const version = `${runs.length}:${shoes.length}:${weights.length}:${latestUpdate}`;
+    if (state.localSeedVersion === version) return;
+    state.runsByUser[LOCAL_PREVIEW_USERNAME] = runs;
+    state.shoesByUser[LOCAL_PREVIEW_USERNAME] = shoes;
+    state.weightsByUser[LOCAL_PREVIEW_USERNAME] = weights;
+    state.localSeedVersion = version;
+    writeLocalState(state);
+  } catch {
+    // Keep local preview usable when optional seed files are absent or malformed.
+  }
 }
 
 function requireLocalUsername(state: LocalState): string {
@@ -84,7 +130,9 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
   const jsonBody = typeof init.body === "string" ? JSON.parse(init.body) : {};
 
   if (url.pathname === "/api/me") {
-    return { user: ensureLocalPreviewSession(state) } as T;
+    const user = ensureLocalPreviewSession(state);
+    await hydrateLocalPreviewSeed(state);
+    return { user } as T;
   }
   if (url.pathname === "/api/auth/logout") {
     state.sessionUsername = null;
@@ -104,6 +152,7 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
     state.runsByUser[username] ??= [];
     state.shoesByUser[username] ??= [];
     state.weightsByUser[username] ??= [];
+    state.runnerProfilesByUser[username] ??= null;
     writeLocalState(state);
     return { user: { username } } as T;
   }
@@ -121,6 +170,33 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
   state.runsByUser[username] ??= [];
   state.shoesByUser[username] ??= [];
   state.weightsByUser[username] ??= [];
+  state.runnerProfilesByUser[username] ??= null;
+
+  if (url.pathname === "/api/runner-profile" && method === "GET") {
+    return { profile: state.runnerProfilesByUser[username] } as T;
+  }
+  if (url.pathname === "/api/runner-profile" && method === "PUT") {
+    const now = new Date().toISOString();
+    const existing = state.runnerProfilesByUser[username];
+    const profile: RunnerProfile = {
+      birthDate: typeof jsonBody.birthDate === "string" && jsonBody.birthDate ? jsonBody.birthDate : null,
+      sex: typeof jsonBody.sex === "string" && jsonBody.sex ? (jsonBody.sex as RunnerProfile["sex"]) : null,
+      heightCm: Number.isFinite(Number(jsonBody.heightCm)) && jsonBody.heightCm !== null && jsonBody.heightCm !== "" ? Number(jsonBody.heightCm) : null,
+      restingHeartRateBpm:
+        Number.isFinite(Number(jsonBody.restingHeartRateBpm)) && jsonBody.restingHeartRateBpm !== null && jsonBody.restingHeartRateBpm !== ""
+          ? Number(jsonBody.restingHeartRateBpm)
+          : null,
+      measuredMaxHeartRateBpm:
+        Number.isFinite(Number(jsonBody.measuredMaxHeartRateBpm)) && jsonBody.measuredMaxHeartRateBpm !== null && jsonBody.measuredMaxHeartRateBpm !== ""
+          ? Number(jsonBody.measuredMaxHeartRateBpm)
+          : null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    state.runnerProfilesByUser[username] = profile;
+    writeLocalState(state);
+    return { profile } as T;
+  }
 
   if (url.pathname === "/api/runs" && method === "GET") {
     return { runs: [...state.runsByUser[username]].sort((a, b) => new Date(b.dateTime).getTime() - new Date(a.dateTime).getTime()) } as T;
@@ -226,7 +302,8 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
     return {
       prediction: buildPrediction(state.runsByUser[username], state.weightsByUser[username], targetDistanceKm, {
         targetFinishSec,
-        targetDate
+        targetDate,
+        runnerProfile: state.runnerProfilesByUser[username]
       })
     } as T;
   }
@@ -307,6 +384,9 @@ export const api = {
   login: (payload: { username: string; password: string }) =>
     request<{ user: PublicUser }>("/api/auth/login", { method: "POST", body: JSON.stringify(payload) }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  getRunnerProfile: () => request<{ profile: RunnerProfile | null }>("/api/runner-profile"),
+  saveRunnerProfile: (profile: RunnerProfile) =>
+    request<{ profile: RunnerProfile }>("/api/runner-profile", { method: "PUT", body: JSON.stringify(profile) }),
   listRuns: () => request<{ runs: RunningRecord[] }>("/api/runs"),
   createRun: (run: RunningRecord) => request<{ run: RunningRecord }>("/api/runs", { method: "POST", body: JSON.stringify(run) }),
   updateRun: (run: RunningRecord) =>

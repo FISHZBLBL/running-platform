@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildPrediction } from "../shared/predictions";
+import { buildPrediction, buildPredictionBacktest } from "../shared/predictions";
+import { buildSmartPrediction } from "../shared/smartPrediction";
 import type { RunningRecord, WeightRecord } from "../shared/types";
 
 function run(partial: Partial<RunningRecord>): RunningRecord {
@@ -14,9 +15,13 @@ function run(partial: Partial<RunningRecord>): RunningRecord {
     avgPowerW: partial.avgPowerW ?? 180,
     avgCadenceSpm: partial.avgCadenceSpm ?? 170,
     avgHeartRateBpm: partial.avgHeartRateBpm ?? 145,
+    effortScore: partial.effortScore ?? null,
+    effortSource: partial.effortSource ?? null,
+    performanceType: partial.performanceType ?? null,
+    elevationGainM: partial.elevationGainM ?? null,
     weather: { temperatureC: null, humidityPct: null, aqi: null },
     notes: "",
-    splits: [],
+    splits: partial.splits ?? [],
     screenshotKeys: [],
     createdAt: dateTime,
     updatedAt: dateTime
@@ -117,5 +122,110 @@ describe("buildPrediction", () => {
     ];
     const prediction = buildPrediction(runs, weights, 10);
     expect(prediction.weightPaceCorrelation).toBeGreaterThan(0.9);
+  });
+
+  it("uses the fastest standard-distance PB regardless of energy score", () => {
+    const runs = [
+      run({ id: "easy", dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 350, effortScore: 3 }),
+      run({ id: "hard", dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 370, effortScore: 8 }),
+      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 8, avgPaceSecPerKm: 390, effortScore: 4 })
+    ];
+    const prediction = buildPrediction(runs, [], 5);
+    expect(prediction.vdotModel.personalBests.find((pb) => pb.key === "5km")?.sourceRunId).toBe("easy");
+  });
+
+  it("walk-forward backtests low-score PBs but skips later non-PB runs", () => {
+    const runs = [
+      run({ id: "pb-1", dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 390, durationSec: 1950, effortScore: 3 }),
+      run({ id: "pb-2", dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 385, durationSec: 1925, effortScore: 4 }),
+      run({ id: "pb-3", dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 380, durationSec: 1900, effortScore: 5 }),
+      run({ id: "pb-4", dateTime: "2026-01-22T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 375, durationSec: 1875, effortScore: 6 }),
+      run({ id: "ordinary", dateTime: "2026-01-29T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 430, durationSec: 2150, effortScore: 10 })
+    ];
+    const backtest = buildPredictionBacktest(runs, []);
+    expect(backtest.status).toBe("ready");
+    expect(backtest.sampleCount).toBe(1);
+    expect(backtest.entries[0]).toMatchObject({ runId: "pb-4", benchmarkType: "pb", benchmarkLabel: "5km PB" });
+  });
+
+  it("backtests a marked race even when it is not a PB", () => {
+    const runs = [
+      run({ id: "pb", dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 360, durationSec: 1800 }),
+      run({ dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 6, avgPaceSecPerKm: 390, durationSec: 2340 }),
+      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 8, avgPaceSecPerKm: 400, durationSec: 3200 }),
+      run({ id: "race", dateTime: "2026-01-22T00:00:00.000Z", distanceKm: 5, avgPaceSecPerKm: 380, durationSec: 1900, performanceType: "race" })
+    ];
+    const backtest = buildPredictionBacktest(runs, []);
+    expect(backtest.entries).toHaveLength(1);
+    expect(backtest.entries[0]).toMatchObject({ runId: "race", benchmarkType: "race", benchmarkLabel: "5km比赛" });
+  });
+
+  it("derives a standard-distance PB from complete splits in a longer run", () => {
+    const splitPaces = [370, 365, 360, 355, 350, 420];
+    const splitRun = run({
+      id: "split-pb",
+      dateTime: "2026-01-15T00:00:00.000Z",
+      distanceKm: 6.2,
+      avgPaceSecPerKm: 380,
+      splits: splitPaces.map((paceSecPerKm, index) => ({
+        index: index + 1,
+        distanceKm: 1,
+        paceSecPerKm,
+        heartRateBpm: 160,
+        powerW: 210,
+        cadenceSpm: 174
+      }))
+    });
+    const prediction = buildPrediction([
+      run({ dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 4 }),
+      run({ dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 7 }),
+      splitRun
+    ], [], 5);
+    const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
+    expect(fiveKmPb?.sourceRunId).toBe("split-pb");
+    expect(fiveKmPb?.estimatedDurationSec).toBe(1800);
+  });
+
+  it("does not let a future PB change an earlier walk-forward result", () => {
+    const history = [
+      run({ id: "pb-1", dateTime: "2026-01-01T00:00:00.000Z", avgPaceSecPerKm: 390 }),
+      run({ id: "pb-2", dateTime: "2026-01-08T00:00:00.000Z", avgPaceSecPerKm: 385 }),
+      run({ id: "pb-3", dateTime: "2026-01-15T00:00:00.000Z", avgPaceSecPerKm: 380 }),
+      run({ id: "pb-4", dateTime: "2026-01-22T00:00:00.000Z", avgPaceSecPerKm: 375 })
+    ];
+    const original = buildPredictionBacktest(history, []).entries.find((entry) => entry.runId === "pb-4");
+    const withFuture = buildPredictionBacktest([
+      ...history,
+      run({ id: "future-pb", dateTime: "2026-02-01T00:00:00.000Z", avgPaceSecPerKm: 330 })
+    ], []).entries.find((entry) => entry.runId === "pb-4");
+    expect(withFuture).toEqual(original);
+  });
+
+  it("progressively corrects the finish time as walk-forward PB errors accumulate", () => {
+    const runs = [
+      run({ id: "pb-1", dateTime: "2026-05-01T00:00:00.000Z", distanceKm: 5, durationSec: 2100, avgPaceSecPerKm: 420 }),
+      run({ id: "pb-2", dateTime: "2026-05-08T00:00:00.000Z", distanceKm: 5, durationSec: 2040, avgPaceSecPerKm: 408 }),
+      run({ id: "pb-3", dateTime: "2026-05-15T00:00:00.000Z", distanceKm: 5, durationSec: 1980, avgPaceSecPerKm: 396 }),
+      run({ id: "pb-4", dateTime: "2026-05-22T00:00:00.000Z", distanceKm: 5, durationSec: 1920, avgPaceSecPerKm: 384 }),
+      run({ id: "pb-5", dateTime: "2026-05-29T00:00:00.000Z", distanceKm: 5, durationSec: 1860, avgPaceSecPerKm: 372 }),
+      run({ id: "pb-6", dateTime: "2026-06-05T00:00:00.000Z", distanceKm: 5, durationSec: 1800, avgPaceSecPerKm: 360 })
+    ];
+    const rawPrediction = buildSmartPrediction(runs, 5);
+    const calibratedPrediction = buildPrediction(runs, [], 5).smartPrediction;
+    const halfMarathonPrediction = buildPrediction(runs, [], 21.0975).smartPrediction;
+
+    expect(calibratedPrediction?.calibrationSampleCount).toBe(3);
+    expect(calibratedPrediction?.calibrationAdjustmentPercent).toBeLessThan(0);
+    expect(calibratedPrediction?.predictedFinishSec).toBeLessThan(rawPrediction?.predictedFinishSec ?? 0);
+    expect(calibratedPrediction?.factors.find((factor) => factor.key === "calibration")?.detail).toContain("历史回测");
+    expect(Object.values(calibratedPrediction?.personalWeights ?? {}).some((weight) => Math.abs(weight - 1) > 0.001)).toBe(true);
+    expect(calibratedPrediction?.personalWeights.longRun).toBeGreaterThanOrEqual(0.35);
+    expect(calibratedPrediction?.personalWeights.longRun).toBeLessThanOrEqual(1.75);
+    expect(calibratedPrediction?.personalWeights.aerobic).toBeGreaterThanOrEqual(0);
+    expect(calibratedPrediction?.personalWeights.aerobic).toBeLessThanOrEqual(2);
+    expect(calibratedPrediction?.personalWeights.endurance).toBeGreaterThanOrEqual(0.35);
+    expect(calibratedPrediction?.personalWeights.endurance).toBeLessThanOrEqual(1.75);
+    expect(halfMarathonPrediction?.personalWeights.endurance).toBeGreaterThan(0.9);
+    expect(halfMarathonPrediction?.personalWeights.longRun).toBeGreaterThan(0.9);
   });
 });

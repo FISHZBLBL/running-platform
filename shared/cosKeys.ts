@@ -16,6 +16,10 @@ export function profileKey(username: string): string {
   return `${userPrefix(username)}profile.json`;
 }
 
+export function runnerProfileKey(username: string): string {
+  return `${userPrefix(username)}runner-profile.json`;
+}
+
 export function keepKey(username: string): string {
   return `${userPrefix(username)}.keep`;
 }

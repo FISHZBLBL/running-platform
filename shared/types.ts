@@ -25,6 +25,10 @@ export type RunningRecord = {
   avgPowerW: number;
   avgCadenceSpm: number;
   avgHeartRateBpm: number;
+  effortScore?: number | null;
+  effortSource?: "apple-watch" | "manual" | null;
+  performanceType?: "race" | "time-trial" | null;
+  elevationGainM?: number | null;
   weather: Weather;
   notes: string;
   splits: RunSplit[];
@@ -60,6 +64,18 @@ export type PublicUser = {
   username: string;
 };
 
+export type RunnerSex = "female" | "male" | "other" | "prefer-not-to-say";
+
+export type RunnerProfile = {
+  birthDate: string | null;
+  sex: RunnerSex | null;
+  heightCm: number | null;
+  restingHeartRateBpm: number | null;
+  measuredMaxHeartRateBpm: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type TrendLine = {
   slope: number;
   intercept: number;
@@ -86,7 +102,89 @@ export type PredictionResult = {
   distanceProjectionBasis: "achieved" | "long-run-progression" | "trend" | "insufficient";
   vdotModel: VdotModel;
   vdotPredictedFinishRangeSec: { fastest: number; conservative: number } | null;
+  smartPrediction: SmartPredictionSummary | null;
   requiredVdotForTargetFinish: number | null;
   warnings: string[];
   recommendations: string[];
+};
+
+export type PredictionConfidence = "low" | "medium" | "high";
+
+export type PersonalPredictionWeightKey = "longRun" | "aerobic" | "power" | "endurance" | "trainingLoad";
+
+export type PersonalPredictionWeights = Record<PersonalPredictionWeightKey, number>;
+
+export type SmartPredictionComponents = {
+  performanceBaselineSec: number;
+  factorImpactsPercent: PersonalPredictionWeights;
+};
+
+export type SmartPredictionFactor = {
+  key: "performance" | "long-run" | "aerobic" | "power" | "cadence" | "endurance" | "training-load" | "calibration" | "weather";
+  label: string;
+  impactPercent: number;
+  detail: string;
+};
+
+export type NearTargetLongRunPrediction = {
+  sourceRunId: string;
+  sourceDate: string;
+  sourceDistanceKm: number;
+  supportingRunCount: number;
+  coveragePercent: number;
+  projectedFinishSec: number;
+  appliedFinishSec: number;
+  blendWeightPercent: number;
+  splitCount: number;
+  splitCoveragePercent: number;
+  secondHalfPaceChangePercent: number | null;
+  cardioDriftPercent: number | null;
+  powerChangePercent: number | null;
+  cadenceChangePercent: number | null;
+  energyScore: number | null;
+};
+
+export type SmartPredictionSummary = {
+  modelVersion: "smart-v6";
+  predictedFinishSec: number;
+  rangeSec: { optimistic: number; conservative: number };
+  confidence: PredictionConfidence;
+  confidenceScore: number;
+  performanceSampleCount: number;
+  calibrationSampleCount: number;
+  calibrationAdjustmentPercent: number;
+  calibrationRawBiasPercent: number | null;
+  calibrationStrengthPercent: number;
+  personalWeights: PersonalPredictionWeights;
+  components: SmartPredictionComponents;
+  nearTargetLongRun: NearTargetLongRunPrediction | null;
+  factors: SmartPredictionFactor[];
+};
+
+export type PredictionBacktestEntry = {
+  runId: string;
+  date: string;
+  distanceKm: number;
+  benchmarkType: "pb" | "race";
+  benchmarkLabel: string;
+  vdotPredictedFinishSec: number;
+  smartPredictedFinishSec: number;
+  actualFinishSec: number;
+  vdotErrorSec: number;
+  smartErrorSec: number;
+};
+
+export type PredictionBacktestMetrics = {
+  meanAbsoluteErrorSec: number;
+  meanAbsolutePercentageError: number;
+  meanBiasSec: number;
+};
+
+export type PredictionBacktestResult = {
+  status: "insufficient-data" | "ready";
+  sampleCount: number;
+  vdotMetrics: PredictionBacktestMetrics | null;
+  smartMetrics: PredictionBacktestMetrics | null;
+  smartImprovementPercent: number | null;
+  entries: PredictionBacktestEntry[];
 };
