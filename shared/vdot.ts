@@ -1,4 +1,5 @@
 import type { RunningRecord } from "./types";
+import { runLocalDate } from "./runDates";
 
 export type VdotDistanceKey = "1500m" | "3km" | "5km" | "10km" | "半马" | "全马";
 export type TrainingPaceKey = "E" | "M" | "T" | "I" | "R";
@@ -117,7 +118,7 @@ export function trainingPacesFromVdot(vdot: number): Record<TrainingPaceKey, num
 }
 
 function splitElapsedAtDistance(run: RunningRecord, distanceKm: number): number | null {
-  if (!Number.isFinite(distanceKm) || distanceKm < 0) return null;
+  if (!Number.isFinite(distanceKm) || distanceKm <= 0) return null;
   let coveredKm = 0;
   let elapsedSec = 0;
   for (const split of run.splits ?? []) {
@@ -130,7 +131,7 @@ function splitElapsedAtDistance(run: RunningRecord, distanceKm: number): number 
     coveredKm += split.distanceKm;
     elapsedSec += split.distanceKm * split.paceSecPerKm;
   }
-  return Math.abs(coveredKm - distanceKm) < 1e-6 ? elapsedSec : null;
+  return null;
 }
 
 export function isWithinStandardDistanceTolerance(recordedDistanceKm: number, targetDistanceKm: number): boolean {
@@ -139,57 +140,70 @@ export function isWithinStandardDistanceTolerance(recordedDistanceKm: number, ta
   return recordedDistanceKm >= minimumDistance - 1e-6 && recordedDistanceKm <= maximumDistance + 1e-6;
 }
 
-function fastestSplitDuration(run: RunningRecord, targetDistanceKm: number): number | null {
-  const boundaries = [0];
-  let coveredKm = 0;
-  for (const split of run.splits ?? []) {
-    if (!Number.isFinite(split.distanceKm) || split.distanceKm <= 0 || !Number.isFinite(split.paceSecPerKm) || split.paceSecPerKm <= 0) {
-      continue;
-    }
-    coveredKm += split.distanceKm;
-    boundaries.push(coveredKm);
-  }
-  if (coveredKm + 1e-6 < targetDistanceKm) return null;
-
-  const starts = new Set<number>([0]);
-  for (const boundary of boundaries) {
-    if (boundary <= coveredKm - targetDistanceKm + 1e-6) starts.add(Math.max(0, boundary));
-    const shifted = boundary - targetDistanceKm;
-    if (shifted >= -1e-6 && shifted <= coveredKm - targetDistanceKm + 1e-6) starts.add(Math.max(0, shifted));
-  }
-
-  let fastest: number | null = null;
-  for (const startKm of starts) {
-    const startSec = splitElapsedAtDistance(run, startKm);
-    const finishSec = splitElapsedAtDistance(run, startKm + targetDistanceKm);
-    if (startSec === null || finishSec === null) continue;
-    const durationSec = finishSec - startSec;
-    if (durationSec > 0 && (fastest === null || durationSec < fastest)) fastest = durationSec;
-  }
-  return fastest;
-}
-
-function wholeRunDurationAtDistance(run: RunningRecord, targetDistanceKm: number): number | null {
-  if (!isWithinStandardDistanceTolerance(run.distanceKm, targetDistanceKm)) return null;
+function wholeRunDurationAtDistance(run: RunningRecord, distance: VdotDistance): number | null {
+  if (run.distanceKm < distance.pbMinKm - 1e-6 || run.distanceKm >= distance.pbMaxKm - 1e-6) return null;
   const paceSecPerKm = run.avgPaceSecPerKm > 0
     ? run.avgPaceSecPerKm
     : run.durationSec > 0 && run.distanceKm > 0
       ? run.durationSec / run.distanceKm
       : null;
-  return paceSecPerKm && Number.isFinite(paceSecPerKm) ? paceSecPerKm * targetDistanceKm : null;
+  return paceSecPerKm && Number.isFinite(paceSecPerKm) ? paceSecPerKm * distance.distanceKm : null;
+}
+
+function tailAdjustedDurationAtDistance(run: RunningRecord, distance: VdotDistance): number | null {
+  if (!Number.isInteger(distance.distanceKm) || !Number.isFinite(run.durationSec) || run.durationSec <= 0) return null;
+  const tails = (run.splits ?? []).filter(
+    (split) => split.kind === "tail" && Number.isFinite(split.durationSec) && (split.durationSec ?? 0) > 0
+  );
+  if (tails.length !== 1) return null;
+
+  const completeSplits = (run.splits ?? []).filter(
+    (split) => split.kind !== "tail" && Number.isFinite(split.distanceKm) && split.distanceKm > 0
+  );
+  const completeDistanceKm = completeSplits.reduce((sum, split) => sum + split.distanceKm, 0);
+  const distanceToleranceKm = Math.max(0.02, distance.distanceKm * 0.002);
+  if (Math.abs(completeDistanceKm - distance.distanceKm) > distanceToleranceKm) return null;
+
+  const tailDurationSec = tails[0].durationSec ?? 0;
+  const completeDurationSec = run.durationSec - tailDurationSec;
+  const completePaceSecPerKm = completeDurationSec / distance.distanceKm;
+  if (
+    completeDurationSec <= 0 ||
+    !Number.isFinite(completePaceSecPerKm) ||
+    completePaceSecPerKm <= 0 ||
+    tailDurationSec >= completePaceSecPerKm
+  ) {
+    return null;
+  }
+  return completeDurationSec;
+}
+
+function trustedSplitDurationAtDistance(run: RunningRecord, distance: VdotDistance, wholeRunEstimateSec: number): number | null {
+  const splitDurationSec = splitElapsedAtDistance(run, distance.distanceKm);
+  if (splitDurationSec === null) return null;
+
+  const recordedPaceSecPerKm = wholeRunEstimateSec / distance.distanceKm;
+  const splitPaceSecPerKm = splitDurationSec / distance.distanceKm;
+  const maximumDifferenceSecPerKm = Math.max(8, recordedPaceSecPerKm * 0.025);
+  return Math.abs(splitPaceSecPerKm - recordedPaceSecPerKm) <= maximumDifferenceSecPerKm
+    ? splitDurationSec
+    : null;
 }
 
 export function standardDistancePerformancesForRun(run: RunningRecord): StandardDistancePerformance[] {
   return VDOT_DISTANCES.flatMap((distance) => {
-    const estimatedDurationSec = fastestSplitDuration(run, distance.distanceKm)
-      ?? wholeRunDurationAtDistance(run, distance.distanceKm);
+    const wholeRunEstimateSec = wholeRunDurationAtDistance(run, distance);
+    if (wholeRunEstimateSec === null) return [];
+    const estimatedDurationSec = tailAdjustedDurationAtDistance(run, distance)
+      ?? trustedSplitDurationAtDistance(run, distance, wholeRunEstimateSec)
+      ?? wholeRunEstimateSec;
     if (estimatedDurationSec === null || !Number.isFinite(estimatedDurationSec) || estimatedDurationSec <= 0) return [];
     return [{
       key: distance.key,
       label: distance.label,
       distanceKm: distance.distanceKm,
       sourceRunId: run.id,
-      sourceDate: run.dateTime.slice(0, 10),
+      sourceDate: runLocalDate(run),
       sourceDistanceKm: run.distanceKm,
       estimatedDurationSec,
       paceSecPerKm: estimatedDurationSec / distance.distanceKm,

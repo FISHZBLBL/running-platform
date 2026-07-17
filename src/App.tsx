@@ -10,6 +10,8 @@ import {
 } from "./ocr";
 import { buildHeartRateBaseline, type HeartRateBaseline } from "@shared/physiology";
 import { buildPrediction, buildPredictionBacktest } from "@shared/predictions";
+import { runLocalDate, runLocalMonth } from "@shared/runDates";
+import { normalizeTailDurationInput } from "@shared/timeInputs";
 import type {
   PredictionBacktestResult,
   PredictionResult,
@@ -111,6 +113,16 @@ const emptySplit: SplitDraft = {
   cadenceSpm: ""
 };
 
+const emptyTailSplit: SplitDraft = {
+  kind: "tail",
+  duration: "",
+  distanceKm: "",
+  pace: "",
+  heartRateBpm: "",
+  powerW: "",
+  cadenceSpm: ""
+};
+
 function createLocalId(): string {
   if (crypto.randomUUID) {
     return crypto.randomUUID();
@@ -167,13 +179,23 @@ function draftFromRun(run: RunningRecord): RunDraft {
     humidityPct: run.weather.humidityPct === null ? "" : String(run.weather.humidityPct),
     aqi: run.weather.aqi === null ? "" : String(run.weather.aqi),
     notes: run.notes ?? "",
-    splits: run.splits.map((split) => ({
-      distanceKm: String(split.distanceKm),
-      pace: formatPace(split.paceSecPerKm),
-      heartRateBpm: String(split.heartRateBpm),
-      powerW: String(split.powerW),
-      cadenceSpm: String(split.cadenceSpm)
-    })),
+    splits: run.splits.map((split) => split.kind === "tail"
+      ? {
+          kind: "tail",
+          duration: formatDuration(split.durationSec ?? 0),
+          distanceKm: "",
+          pace: "",
+          heartRateBpm: "",
+          powerW: "",
+          cadenceSpm: ""
+        }
+      : {
+          distanceKm: String(split.distanceKm),
+          pace: formatPace(split.paceSecPerKm),
+          heartRateBpm: String(split.heartRateBpm),
+          powerW: String(split.powerW),
+          cadenceSpm: String(split.cadenceSpm)
+        }),
     screenshotKeys: run.screenshotKeys
   };
 }
@@ -236,12 +258,20 @@ function formatPace(seconds: number): string {
 
 function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds)) return "-";
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = Math.round(seconds % 60);
+  const roundedSeconds = Math.round(seconds);
+  const hours = Math.floor(roundedSeconds / 3600);
+  const minutes = Math.floor((roundedSeconds % 3600) / 60);
+  const rest = roundedSeconds % 60;
   return hours > 0
     ? `${hours}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`
     : `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function predictionErrorLabel(errorSec: number, actualFinishSec: number): string {
+  if (!Number.isFinite(errorSec) || !Number.isFinite(actualFinishSec) || actualFinishSec <= 0) return "误差 -";
+  if (Math.abs(errorSec) < 0.5) return "与实际一致";
+  const errorPercent = Math.abs(errorSec) / actualFinishSec * 100;
+  return `预测偏${errorSec > 0 ? "慢" : "快"} ${formatDuration(Math.abs(errorSec))}（${errorPercent.toFixed(1)}%）`;
 }
 
 function formatKm(value: number): string {
@@ -276,7 +306,7 @@ function movingAverage(values: number[], windowSize = 3): number[] {
 function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceKm: number; longestDistanceKm: number }> {
   const totals = new Map<string, { distanceKm: number; longestDistanceKm: number }>();
   for (const run of runs) {
-    const month = run.dateTime.slice(0, 7);
+    const month = runLocalMonth(run);
     const current = totals.get(month) ?? { distanceKm: 0, longestDistanceKm: 0 };
     totals.set(month, {
       distanceKm: current.distanceKm + run.distanceKm,
@@ -288,9 +318,9 @@ function monthlyMileage(runs: RunningRecord[]): Array<{ month: string; distanceK
     .map(([month, value]) => ({ month, ...value }));
 }
 
-function isoWeekKey(dateTime: string): string {
-  const date = new Date(dateTime);
-  const utc = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+function isoWeekKey(dateKey: string): string {
+  const [year, month, dayOfMonth] = dateKey.split("-").map(Number);
+  const utc = new Date(Date.UTC(year, month - 1, dayOfMonth));
   const day = utc.getUTCDay() || 7;
   utc.setUTCDate(utc.getUTCDate() + 4 - day);
   const yearStart = new Date(Date.UTC(utc.getUTCFullYear(), 0, 1));
@@ -301,7 +331,7 @@ function isoWeekKey(dateTime: string): string {
 function weeklyMileage(runs: RunningRecord[]): Array<{ week: string; distanceKm: number; longestDistanceKm: number }> {
   const totals = new Map<string, { distanceKm: number; longestDistanceKm: number }>();
   for (const run of runs) {
-    const week = isoWeekKey(run.dateTime);
+    const week = isoWeekKey(runLocalDate(run));
     const current = totals.get(week) ?? { distanceKm: 0, longestDistanceKm: 0 };
     totals.set(week, {
       distanceKm: current.distanceKm + run.distanceKm,
@@ -316,7 +346,7 @@ function weeklyMileage(runs: RunningRecord[]): Array<{ week: string; distanceKm:
 function groupHistoryByMonth(runs: RunningRecord[], weights: WeightRecord[]): HistoryMonth[] {
   const grouped = new Map<string, HistoryMonth>();
   for (const run of runs) {
-    const month = run.dateTime.slice(0, 7);
+    const month = runLocalMonth(run);
     if (!grouped.has(month)) grouped.set(month, { month, runs: [], weights: [] });
     grouped.get(month)!.runs.push(run);
   }
@@ -662,36 +692,118 @@ function extractRunDraftFromText(text: string): Partial<RunDraft> {
   return result;
 }
 
-async function detectTextFromImages(files: File[]): Promise<string> {
+function effortCropRectangle(width: number, height: number) {
+  const left = Math.floor(width * 0.06);
+  const top = Math.floor(height * 0.82);
+  const right = Math.floor(width * 0.18);
+  const bottom = Math.floor(height * 0.88);
+  return {
+    left,
+    top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top)
+  };
+}
+
+async function createEffortScoreCanvas(file: File): Promise<HTMLCanvasElement> {
+  const bitmap = await createImageBitmap(file);
+  const rectangle = effortCropRectangle(bitmap.width, bitmap.height);
+  const scale = 4;
+  const canvas = document.createElement("canvas");
+  canvas.width = rectangle.width * scale;
+  canvas.height = rectangle.height * scale;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    bitmap.close();
+    throw new Error("无法创建耗能评分识别画布");
+  }
+  context.imageSmoothingEnabled = false;
+  context.drawImage(
+    bitmap,
+    rectangle.left,
+    rectangle.top,
+    rectangle.width,
+    rectangle.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+  bitmap.close();
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < image.data.length; index += 4) {
+    const isBrightGlyph = Math.max(image.data[index], image.data[index + 1], image.data[index + 2]) >= 125;
+    const value = isBrightGlyph ? 0 : 255;
+    image.data[index] = value;
+    image.data[index + 1] = value;
+    image.data[index + 2] = value;
+    image.data[index + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
+async function detectTextFromImages(files: File[], includeEffortRegion = false): Promise<string> {
   const texts: string[] = [];
+  const priorityTexts: string[] = [];
 
   if (window.TextDetector) {
     const detector = new window.TextDetector();
     for (const file of files) {
       const bitmap = await createImageBitmap(file);
       const results = await detector.detect(bitmap);
-      texts.push(...results.map((result) => result.rawValue ?? "").filter(Boolean));
+      const fullText = results.map((result) => result.rawValue ?? "").filter(Boolean).join("\n");
+      if (fullText) texts.push(fullText);
+      if (includeEffortRegion && /耗能|体能训练详细信息/.test(fullText)) {
+        const rectangle = effortCropRectangle(bitmap.width, bitmap.height);
+        const effortBitmap = await createImageBitmap(
+          file,
+          rectangle.left,
+          rectangle.top,
+          rectangle.width,
+          rectangle.height
+        );
+        const effortResults = await detector.detect(effortBitmap);
+        const effortText = effortResults.map((result) => result.rawValue ?? "").filter(Boolean).join("\n");
+        if (effortText) priorityTexts.push(`耗能评分\n${effortText}`);
+        effortBitmap.close();
+      }
+      bitmap.close();
     }
-    return texts.join("\n");
+    return [...priorityTexts, ...texts].join("\n");
   }
 
   const { createWorker, PSM } = await import("tesseract.js");
   const worker = await createWorker(["eng", "chi_sim"]);
   try {
-    await worker.setParameters({
-      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
-      preserve_interword_spaces: "1"
-    });
     for (const file of files) {
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+        tessedit_char_whitelist: "",
+        preserve_interword_spaces: "1"
+      });
       const result = await worker.recognize(file);
       if (result.data.text.trim()) {
         texts.push(result.data.text.trim());
+      }
+      if (includeEffortRegion && /耗能|体能训练详细信息/.test(result.data.text)) {
+        const effortCanvas = await createEffortScoreCanvas(file);
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SINGLE_CHAR,
+          tessedit_char_whitelist: "0123456789",
+          preserve_interword_spaces: "1"
+        });
+        const effortResult = await worker.recognize(effortCanvas);
+        if (effortResult.data.text.trim()) {
+          priorityTexts.push(`耗能评分\n${effortResult.data.text.trim()}`);
+        }
       }
     }
   } finally {
     await worker.terminate();
   }
-  return texts.join("\n");
+  return [...priorityTexts, ...texts].join("\n");
 }
 
 function nearestWeight(run: RunningRecord, weights: WeightRecord[]): WeightRecord | null {
@@ -921,7 +1033,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     if (!ref.current) return;
     const chart = echarts.init(ref.current);
     const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
-    const dates = sorted.map((run) => run.dateTime.slice(0, 10));
+    const dates = sorted.map(runLocalDate);
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
     const paceAverage = movingAverage(paces);
     const distances = sorted.map((run) => run.distanceKm);
@@ -960,7 +1072,7 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
     const paceHeartScatter = sorted
       .map((run) => {
         if (!Number.isFinite(run.avgPaceSecPerKm) || !Number.isFinite(run.avgHeartRateBpm)) return null;
-        return [run.avgPaceSecPerKm, run.avgHeartRateBpm, run.distanceKm, run.dateTime.slice(0, 10)];
+        return [run.avgPaceSecPerKm, run.avgHeartRateBpm, run.distanceKm, runLocalDate(run)];
       })
       .filter((item): item is [number, number, number, string] => Boolean(item));
     const paceHeartLine = simpleRegressionLine(
@@ -1301,7 +1413,7 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
   const isNarrow = useNarrowViewport();
   const option = useMemo<echarts.EChartsOption>(() => {
     const sorted = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
-    const dates = sorted.map((run) => run.dateTime.slice(0, 10));
+    const dates = sorted.map(runLocalDate);
     const paces = sorted.map((run) => run.avgPaceSecPerKm);
     const paceAverage = movingAverage(paces);
     const distances = sorted.map((run) => run.distanceKm);
@@ -1481,7 +1593,7 @@ function PaceHeartChart({ runs }: { runs: RunningRecord[] }) {
     const paceHeartScatter = sorted
       .map((run) => {
         if (!Number.isFinite(run.avgPaceSecPerKm) || !Number.isFinite(run.avgHeartRateBpm)) return null;
-        return [run.avgPaceSecPerKm, run.avgHeartRateBpm, run.distanceKm, run.dateTime.slice(0, 10)];
+        return [run.avgPaceSecPerKm, run.avgHeartRateBpm, run.distanceKm, runLocalDate(run)];
       })
       .filter((item): item is [number, number, number, string] => Boolean(item));
     const paceHeartLine = simpleRegressionLine(
@@ -1826,11 +1938,38 @@ function PredictionPanel({
                   <div><i className="smart-bar" style={{ height: `${Math.max(22, ((smartError ?? 0) / errorScale) * 100)}%` }}>{smartError?.toFixed(1)}%</i><span>智能模型</span></div>
                   <p>智能误差改善 <strong>{signedPercent(improvement)}</strong></p>
                 </div>
-                <div className="backtest-compact-list">
+                <div className="backtest-latest-list" aria-label="最近三条历史回测">
                   {backtest.entries.slice(-3).reverse().map((entry) => (
-                    <div key={entry.runId}><span>{entry.date} · {entry.benchmarkLabel}</span><strong>实际 {formatDuration(entry.actualFinishSec)}</strong></div>
+                    <div key={entry.runId} className="backtest-latest-row">
+                      <span>{entry.date} · {entry.benchmarkLabel}</span>
+                      <div>
+                        <span>智能预测 <strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></span>
+                        <span>实际 <strong>{formatDuration(entry.actualFinishSec)}</strong></span>
+                      </div>
+                      <small>{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</small>
+                    </div>
                   ))}
                 </div>
+                <details className="backtest-history">
+                  <summary><span>全部参与回测的数据</span><strong>{backtest.sampleCount} 条</strong></summary>
+                  <p>按日期倒序展示；每次预测只使用该日期之前的跑步和回测样本。</p>
+                  <div className="backtest-history-list">
+                    {[...backtest.entries].reverse().map((entry) => (
+                      <article key={entry.runId} className="backtest-history-row">
+                        <header><span>{entry.date}</span><strong>{entry.benchmarkLabel}</strong></header>
+                        <div className="backtest-history-values">
+                          <div><span>实际成绩</span><strong>{formatDuration(entry.actualFinishSec)}</strong></div>
+                          <div><span>智能预测</span><strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></div>
+                          <div><span>VDOT 对照</span><strong>{formatDuration(entry.vdotPredictedFinishSec)}</strong></div>
+                        </div>
+                        <p className="backtest-history-error">{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</p>
+                        <p className="backtest-history-inputs">
+                          当时使用 {entry.inputRunCount} 条历史跑步 · {entry.performanceSampleCount} 条表现数据 · {entry.calibrationSampleCount} 条个人校准样本 · 可信度 {entry.smartConfidenceScore}/100
+                        </p>
+                      </article>
+                    ))}
+                  </div>
+                </details>
               </>
             ) : <p className="muted-text">系统会使用历史 PB 与比赛记录验证预测误差。</p>}
           </section>
@@ -1977,7 +2116,7 @@ function RunnerProfileMenu({
           </label>
           <label>
             身高 cm
-            <input type="number" min="100" max="250" step="0.1" inputMode="decimal" value={draft.heightCm} onChange={(event) => setField("heightCm", event.target.value)} />
+            <input type="text" inputMode="decimal" value={draft.heightCm} onChange={(event) => setField("heightCm", event.target.value)} />
           </label>
           <button className="primary-button" disabled={busy}>{busy ? "保存中..." : "保存个人资料"}</button>
           {message && <p className="form-message profile-message">{message}</p>}
@@ -2043,16 +2182,25 @@ function PredictionBacktestPanel({ backtest }: { backtest: PredictionBacktestRes
             <div><span>智能模型误差</span><strong>{backtest.smartMetrics ? `${backtest.smartMetrics.meanAbsolutePercentageError.toFixed(1)}%` : "-"}</strong></div>
             <div><span>智能误差改善</span><strong>{signedPercent(backtest.smartImprovementPercent)}</strong></div>
           </div>
-          <div className="backtest-list">
-            {backtest.entries.slice(-5).reverse().map((entry) => (
-              <div key={entry.runId}>
-                <span>{entry.date} · {entry.benchmarkLabel} · {entry.distanceKm.toFixed(1)} km</span>
-                <span>VDOT {formatDuration(entry.vdotPredictedFinishSec)}</span>
-                <span>智能 {formatDuration(entry.smartPredictedFinishSec)}</span>
-                <strong>实际 {formatDuration(entry.actualFinishSec)}</strong>
-              </div>
-            ))}
-          </div>
+          <details className="backtest-history" open>
+            <summary><span>全部参与回测的数据</span><strong>{backtest.sampleCount} 条</strong></summary>
+            <div className="backtest-history-list">
+              {[...backtest.entries].reverse().map((entry) => (
+                <article key={entry.runId} className="backtest-history-row">
+                  <header><span>{entry.date}</span><strong>{entry.benchmarkLabel}</strong></header>
+                  <div className="backtest-history-values">
+                    <div><span>实际成绩</span><strong>{formatDuration(entry.actualFinishSec)}</strong></div>
+                    <div><span>智能预测</span><strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></div>
+                    <div><span>VDOT 对照</span><strong>{formatDuration(entry.vdotPredictedFinishSec)}</strong></div>
+                  </div>
+                  <p className="backtest-history-error">{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</p>
+                  <p className="backtest-history-inputs">
+                    当时使用 {entry.inputRunCount} 条历史跑步 · {entry.performanceSampleCount} 条表现数据 · {entry.calibrationSampleCount} 条个人校准样本 · 可信度 {entry.smartConfidenceScore}/100
+                  </p>
+                </article>
+              ))}
+            </div>
+          </details>
         </>
       ) : (
         <div className="empty-chart">系统会自动识别标准距离 PB，并将 PB 与比赛记录作为回测目标。每次回测只使用该日期之前的跑步数据。</div>
@@ -2194,6 +2342,19 @@ function RunForm({
     }));
   }
 
+  function addCompleteSplit() {
+    setDraft((current) => {
+      const splits = [...current.splits];
+      const tailIndex = splits.findIndex((split) => split.kind === "tail");
+      if (tailIndex >= 0) {
+        splits.splice(tailIndex, 0, { ...emptySplit });
+      } else {
+        splits.push({ ...emptySplit });
+      }
+      return { ...current, splits };
+    });
+  }
+
   function removeSplit(index: number) {
     setDraft((current) => ({
       ...current,
@@ -2209,17 +2370,29 @@ function RunForm({
       const durationSec = parseDuration(draft.duration);
       const distanceKm = parseNumber(draft.distanceKm);
       const uploaded = files.length > 0 ? await api.uploadScreenshots(draft.id, files) : { keys: [] };
-      const splits: RunSplit[] = draft.splits.map((split, index) => ({
-        index: index + 1,
-        distanceKm: parseNumber(split.distanceKm, 1),
-        paceSecPerKm: parsePace(split.pace),
-        heartRateBpm: parseNumber(split.heartRateBpm),
-        powerW: parseNumber(split.powerW),
-        cadenceSpm: parseNumber(split.cadenceSpm)
-      }));
+      const splits: RunSplit[] = draft.splits.map((split, index) => split.kind === "tail"
+        ? {
+            index: index + 1,
+            kind: "tail",
+            durationSec: parseDuration(split.duration ?? ""),
+            distanceKm: 0,
+            paceSecPerKm: 0,
+            heartRateBpm: 0,
+            powerW: 0,
+            cadenceSpm: 0
+          }
+        : {
+            index: index + 1,
+            distanceKm: parseNumber(split.distanceKm, 1),
+            paceSecPerKm: parsePace(split.pace),
+            heartRateBpm: parseNumber(split.heartRateBpm),
+            powerW: parseNumber(split.powerW),
+            cadenceSpm: parseNumber(split.cadenceSpm)
+          });
       const payload: RunningRecord = {
         id: draft.id,
         dateTime: new Date(draft.dateTime).toISOString(),
+        localDate: draft.dateTime.slice(0, 10),
         shoeId: draft.shoeId || null,
         distanceKm,
         durationSec,
@@ -2268,7 +2441,7 @@ function RunForm({
     }
     setMessage(window.TextDetector ? "正在使用浏览器内置识别，请稍等。" : "正在使用兼容 OCR 识别，首次加载可能需要几十秒。");
     try {
-      const text = await detectTextFromImages(files);
+      const text = await detectTextFromImages(files, true);
       const patch = extractRunDraftFromOcrText(text);
       setRecognizedText(text || "未识别到文本。");
       if (Object.keys(patch).length === 0) {
@@ -2308,10 +2481,12 @@ function RunForm({
       }
       setDraft((current) => ({ ...current, splits: result.splits }));
       const droppedText =
-        result.droppedIndexes.length > 0 ? `已按总距离丢弃第 ${result.droppedIndexes.join("、")} 段尾段。` : "没有发现需要丢弃的尾段。";
+        result.droppedIndexes.length > 0 ? `已忽略超出总距离的第 ${result.droppedIndexes.join("、")} 段。` : "";
       const incompleteText =
         result.incompleteIndexes.length > 0 ? `第 ${result.incompleteIndexes.join("、")} 段有字段未可靠识别，请重点校对。` : "各保留分段字段完整。";
-      setMessage(`已识别 ${result.detectedCount} 段，保留 ${result.splits.length} 段完整公里。${droppedText}${incompleteText}`);
+      const completeSplitCount = result.splits.filter((split) => split.kind !== "tail").length;
+      const tailText = result.tailDuration ? `已追加尾段 ${result.tailDuration}，仅保留时间。` : "未发现可确认的短尾段。";
+      setMessage(`已识别 ${result.detectedCount} 段，保留 ${completeSplitCount} 段完整公里。${tailText}${droppedText}${incompleteText}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "单段截图识别失败，请手动校对录入。");
     }
@@ -2330,8 +2505,16 @@ function RunForm({
               取消编辑
             </button>
           )}
-          <button type="button" className="ghost-button" onClick={() => setField("splits", [...draft.splits, { ...emptySplit }])}>
+          <button type="button" className="ghost-button" onClick={addCompleteSplit}>
             + 分段
+          </button>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={draft.splits.some((split) => split.kind === "tail")}
+            onClick={() => setField("splits", [...draft.splits, { ...emptyTailSplit }])}
+          >
+            + 尾段
           </button>
         </div>
       </div>
@@ -2395,13 +2578,12 @@ function RunForm({
             <label>
               Apple Watch 耗能评分
               <input
-                type="number"
-                min="1"
-                max="10"
-                step="1"
+                type="text"
                 value={draft.effortScore}
                 onChange={(event) => setField("effortScore", event.target.value)}
                 inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={2}
                 placeholder="1-10，可后补"
               />
             </label>
@@ -2414,7 +2596,13 @@ function RunForm({
             </label>
             <label>
               累计爬升 m（可选）
-              <input type="number" min="0" step="1" inputMode="numeric" value={draft.elevationGainM} onChange={(event) => setField("elevationGainM", event.target.value)} />
+              <input
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={draft.elevationGainM}
+                onChange={(event) => setField("elevationGainM", event.target.value)}
+              />
             </label>
           </div>
         </div>
@@ -2471,7 +2659,23 @@ function RunForm({
         )}
         {draft.splits.length > 0 && (
           <div className="split-table wide">
-            {draft.splits.map((split, index) => (
+            {draft.splits.map((split, index) => split.kind === "tail" ? (
+              <div className="split-row tail-split-row" key={index}>
+                <strong>尾段</strong>
+                <input
+                  aria-label="尾段时间"
+                  value={split.duration ?? ""}
+                  onChange={(event) => setSplit(index, "duration", event.target.value)}
+                  onBlur={(event) => setSplit(index, "duration", normalizeTailDurationInput(event.target.value))}
+                  inputMode="numeric"
+                  placeholder="时间"
+                />
+                <span className="tail-split-note">仅记录时间，不填写配速、心率、功率和步频</span>
+                <button type="button" className="ghost-button small-button danger-button split-delete-button" onClick={() => removeSplit(index)}>
+                  删除
+                </button>
+              </div>
+            ) : (
               <div className="split-row" key={index}>
                 <strong>{index + 1}</strong>
                 <input value={split.distanceKm} onChange={(event) => setSplit(index, "distanceKm", event.target.value)} inputMode="decimal" placeholder="km" />
@@ -2558,7 +2762,7 @@ function ShoeLibrary({
     const dates = new Map<string, string>();
     for (const run of runs) {
       if (!run.shoeId) continue;
-      const date = run.dateTime.slice(0, 10);
+      const date = runLocalDate(run);
       if (!dates.has(run.shoeId) || date > dates.get(run.shoeId)!) {
         dates.set(run.shoeId, date);
       }
@@ -2840,18 +3044,22 @@ function HistoryManager({
                     <h3>跑步</h3>
                     <div className="history-items">
                       {month.runs.map((run) => {
-                        const hasSplits = run.splits.length > 0;
+                        const completeSplitCount = run.splits.filter((split) => split.kind !== "tail").length;
+                        const tailSplit = run.splits.find((split) => split.kind === "tail");
+                        const hasSplits = completeSplitCount > 0 || Boolean(tailSplit);
                         const hasShoe = Boolean(run.shoeId);
                         const shoeName = run.shoeId ? shoeNames.get(run.shoeId) ?? "已删除跑鞋" : "未关联跑鞋";
                         return (
                           <div className="history-item" key={run.id}>
                             <div className="history-item-main">
                               <div className="history-title-row">
-                                <strong>{run.dateTime.slice(0, 10)}</strong>
+                                <strong>{runLocalDate(run)}</strong>
                                 <span className="history-badges">
                                   <HistoryDataBadge
                                     present={hasSplits}
-                                    title={hasSplits ? `${run.splits.length} 段` : "未录入分段"}
+                                    title={hasSplits
+                                      ? `${completeSplitCount} 段${tailSplit ? ` + 尾段 ${formatDuration(tailSplit.durationSec ?? 0)}` : ""}`
+                                      : "未录入分段"}
                                     className="split-badge"
                                   >
                                     <SplitBadgeIcon />
@@ -3057,7 +3265,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   }
 
   async function deleteRunRecord(run: RunningRecord) {
-    const ok = window.confirm(`确定删除 ${run.dateTime.slice(0, 10)} 的跑步记录吗？此操作不能撤销。`);
+    const ok = window.confirm(`确定删除 ${runLocalDate(run)} 的跑步记录吗？此操作不能撤销。`);
     if (!ok) return;
     await api.deleteRun(run.id);
     if (editingRun?.id === run.id) {

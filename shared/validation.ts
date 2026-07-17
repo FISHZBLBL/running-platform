@@ -1,4 +1,5 @@
 import type { RunnerProfile, RunnerSex, RunningRecord, RunningShoe, RunSplit, Weather, WeightRecord } from "./types";
+import { calendarDateFromDateTime } from "./runDates";
 
 export class ValidationError extends Error {
   status = 400;
@@ -103,6 +104,18 @@ function validateWeather(input: unknown): Weather {
 
 function validateSplit(input: unknown, fallbackIndex: number): RunSplit {
   const split = input as Partial<RunSplit>;
+  if (split.kind === "tail") {
+    return {
+      index: Math.round(finiteNumber(split.index ?? fallbackIndex, "split.index", 1)),
+      kind: "tail",
+      durationSec: finiteNumber(split.durationSec, "split.durationSec", 1),
+      distanceKm: 0,
+      paceSecPerKm: 0,
+      heartRateBpm: 0,
+      powerW: 0,
+      cadenceSpm: 0
+    };
+  }
   return {
     index: Math.round(finiteNumber(split.index ?? fallbackIndex, "split.index", 1)),
     distanceKm: finiteNumber(split.distanceKm, "split.distanceKm", 0.01),
@@ -131,10 +144,14 @@ export function validateRunPayload(input: unknown, existing?: RunningRecord): Ru
   if (performanceTypeValue && performanceTypeValue !== "race" && performanceTypeValue !== "time-trial") {
     throw new ValidationError("performanceType is not supported.");
   }
+  const dateTime = validateDateTime(payload.dateTime);
+  const requestedLocalDate = provided("localDate") ? payload.localDate : existing?.localDate;
+  const localDate = requestedLocalDate ? validateDate(requestedLocalDate) : calendarDateFromDateTime(dateTime);
 
   return {
     id: stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"),
-    dateTime: validateDateTime(payload.dateTime),
+    dateTime,
+    localDate,
     shoeId: optionalString(payload.shoeId, "shoeId"),
     distanceKm,
     durationSec,

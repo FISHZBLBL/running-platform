@@ -87,6 +87,47 @@ describe("smart prediction", () => {
     expect(prediction?.factors.find((factor) => factor.key === "cadence")).toBeDefined();
   });
 
+  it("keeps existing prediction output unchanged when a time-only tail is present", () => {
+    const baseline = run({
+      id: "race-10k-tail-check",
+      dateTime: "2026-05-01T00:00:00.000Z",
+      distanceKm: 10,
+      durationSec: 3900,
+      avgPaceSecPerKm: 390,
+      performanceType: "race"
+    });
+    const fullSplits = detailedSplits(Array(18).fill(420), Array(18).fill(160), Array(18).fill(220), Array(18).fill(176));
+    const longRun = run({
+      id: "long-run-tail-check",
+      dateTime: "2026-06-08T00:00:00.000Z",
+      distanceKm: 18.01,
+      durationSec: 7563,
+      avgPaceSecPerKm: 420,
+      effortScore: 6,
+      splits: fullSplits
+    });
+    const withTail = run({
+      ...longRun,
+      splits: [...fullSplits, {
+        index: 19,
+        kind: "tail",
+        durationSec: 3,
+        distanceKm: 0,
+        paceSecPerKm: 0,
+        heartRateBpm: 0,
+        powerW: 0,
+        cadenceSpm: 0
+      }]
+    });
+
+    const withoutTailPrediction = buildSmartPrediction([baseline, longRun], 21.0975, { referenceDate: new Date("2026-06-15T00:00:00.000Z") });
+    const withTailPrediction = buildSmartPrediction([baseline, withTail], 21.0975, { referenceDate: new Date("2026-06-15T00:00:00.000Z") });
+
+    expect(withTailPrediction?.predictedFinishSec).toBe(withoutTailPrediction?.predictedFinishSec);
+    expect(withTailPrediction?.nearTargetLongRun?.blendWeightPercent).toBe(withoutTailPrediction?.nearTargetLongRun?.blendWeightPercent);
+    expect(withTailPrediction?.nearTargetLongRun?.splitCount).toBe(18);
+  });
+
   it("returns a confidence score and an ordered calibrated range", () => {
     const runs = [
       run({ id: "race-a", dateTime: "2026-05-01T00:00:00.000Z", durationSec: 1900, effortScore: 9, performanceType: "race" }),

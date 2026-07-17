@@ -8,6 +8,8 @@ export type Weather = {
 
 export type RunSplit = {
   index: number;
+  kind?: "tail";
+  durationSec?: number;
   distanceKm: number;
   paceSecPerKm: number;
   heartRateBpm: number;
@@ -18,6 +20,7 @@ export type RunSplit = {
 export type RunningRecord = {
   id: string;
   dateTime: string;
+  localDate?: string | null;
   shoeId: string | null;
   distanceKm: number;
   durationSec: number;
@@ -167,6 +170,10 @@ export type PredictionBacktestEntry = {
   distanceKm: number;
   benchmarkType: "pb" | "race";
   benchmarkLabel: string;
+  inputRunCount: number;
+  performanceSampleCount: number;
+  calibrationSampleCount: number;
+  smartConfidenceScore: number;
   vdotPredictedFinishSec: number;
   smartPredictedFinishSec: number;
   actualFinishSec: number;

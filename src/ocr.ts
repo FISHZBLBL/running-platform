@@ -1,4 +1,6 @@
 export type SplitDraft = {
+  kind?: "tail";
+  duration?: string;
   distanceKm: string;
   pace: string;
   heartRateBpm: string;
@@ -12,6 +14,8 @@ export type SplitOcrResult = {
   fullSplitCount: number;
   droppedIndexes: number[];
   incompleteIndexes: number[];
+  tailIndex?: number;
+  tailDuration?: string;
 };
 
 export type RunOcrPatch = Partial<{
@@ -22,6 +26,7 @@ export type RunOcrPatch = Partial<{
   avgPowerW: string;
   avgCadenceSpm: string;
   avgHeartRateBpm: string;
+  elevationGainM: string;
   effortScore: string;
 }>;
 
@@ -103,6 +108,7 @@ function extractEffortScore(text: string): string | null {
   if (!section) return null;
 
   // Apple Watch 的中文等级名称可以在数字被误识别时提供更可靠的校正依据。
+  if (section.includes("竭尽全力")) return "9";
   if (section.includes("困难")) return "7";
   if (section.includes("适中")) return "6";
 
@@ -227,10 +233,13 @@ function parseEffortSplits(lines: string[]): SplitDraft[] {
 function upsertSplit(map: Map<number, SplitDraft>, index: number, patch: Partial<SplitDraft>) {
   const current = map.get(index) ?? { ...emptySplit };
   const next = { ...current };
-  for (const key of Object.keys(patch) as (keyof SplitDraft)[]) {
-    const value = patch[key];
-    if (value) next[key] = value;
-  }
+  if (patch.kind) next.kind = patch.kind;
+  if (patch.duration) next.duration = patch.duration;
+  if (patch.distanceKm) next.distanceKm = patch.distanceKm;
+  if (patch.pace) next.pace = patch.pace;
+  if (patch.heartRateBpm) next.heartRateBpm = patch.heartRateBpm;
+  if (patch.powerW) next.powerW = patch.powerW;
+  if (patch.cadenceSpm) next.cadenceSpm = patch.cadenceSpm;
   map.set(index, next);
 }
 
@@ -291,6 +300,37 @@ function mergeSplitLists(primary: SplitDraft[], secondary: SplitDraft[]): Map<nu
   return splitMap;
 }
 
+function extractTailSplit(text: string, fullSplitCount: number): { index: number; split: SplitDraft } | null {
+  if (fullSplitCount < 1) return null;
+  const normalized = normalizeSplitText(text);
+  const rowPattern = /(?:^|\n)\s*(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*次))/g;
+  const rows = [...normalized.matchAll(rowPattern)].map((match) => ({ index: Number(match[1]), start: match.index ?? 0 }));
+  const expectedIndex = fullSplitCount + 1;
+  const rowPosition = rows.findIndex((row) => row.index === expectedIndex);
+  if (rowPosition < 0) return null;
+
+  const row = rows[rowPosition];
+  const next = rows[rowPosition + 1]?.start ?? normalized.length;
+  const chunk = normalized.slice(row.start, next);
+  const time = chunk.match(/\b(\d{1,2}:\d{2})\b/)?.[1];
+  if (!time) return null;
+  const durationSec = clockToSeconds(time);
+  if (durationSec === null || durationSec <= 0 || durationSec >= 60) return null;
+
+  return {
+    index: expectedIndex,
+    split: {
+      kind: "tail",
+      duration: normalizeDurationToken(time),
+      distanceKm: "",
+      pace: "",
+      heartRateBpm: "",
+      powerW: "",
+      cadenceSpm: ""
+    }
+  };
+}
+
 export function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrResult {
   const fullSplitCount = Math.max(0, Math.floor(totalDistanceKm));
   const rowMap = extractSplitRows(text);
@@ -300,7 +340,10 @@ export function extractSplitsFromText(text: string, totalDistanceKm: number): Sp
       ? rowMap
       : mergeSplitLists(parseTimePaceHeartSplits(lines), parseEffortSplits(lines));
   const detectedIndexes = [...splitMap.keys()].sort((a, b) => a - b);
-  const droppedIndexes = detectedIndexes.filter((index) => fullSplitCount > 0 && index > fullSplitCount);
+  const tail = extractTailSplit(text, fullSplitCount);
+  const droppedIndexes = detectedIndexes.filter(
+    (index) => fullSplitCount > 0 && index > fullSplitCount && index !== tail?.index
+  );
   const retainedEntries = detectedIndexes
     .filter((index) => fullSplitCount === 0 || index <= fullSplitCount)
     .map((index) => [index, splitMap.get(index)!] as const)
@@ -310,17 +353,23 @@ export function extractSplitsFromText(text: string, totalDistanceKm: number): Sp
     .map(([index]) => index);
 
   return {
-    splits: retainedEntries.map(([, split]) => split),
+    splits: [...retainedEntries.map(([, split]) => split), ...(tail ? [tail.split] : [])],
     detectedCount: detectedIndexes.length,
     fullSplitCount,
     droppedIndexes,
-    incompleteIndexes
+    incompleteIndexes,
+    tailIndex: tail?.index,
+    tailDuration: tail?.split.duration
   };
 }
 
 function localDateTimeFromText(text: string, referenceDate: Date): string | null {
-  const dateMatch = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-  const timeMatch = text.match(/(\d{1,2}):(\d{2})\s*[-–—]\s*\d{1,2}:\d{2}/);
+  const normalizedTimeText = text
+    .replace(/[：﹕︰]/g, ":")
+    .replace(/[－–—~～]/g, "-")
+    .replace(/\s*至\s*/g, "-");
+  const dateMatch = normalizedTimeText.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+  const timeMatch = normalizedTimeText.match(/(?:^|\D)([01]?\d|2[0-3]):([0-5]\d)\s*-\s*(?:[01]?\d|2[0-3]):[0-5]\d/);
   if (!dateMatch || !timeMatch) return null;
 
   const month = Number(dateMatch[1]);
@@ -357,6 +406,9 @@ export function extractRunDraftFromText(text: string, referenceDate = new Date()
   const durationMatch =
     normalized.match(/(?:体能训练时间|训练时间|总用时|用时).{0,80}?(\d{1,3}:\d{2}(?::\d{2})?)/) ??
     (hasOverviewMarkers ? normalized.match(/\b(\d{1,3}:\d{2}:\d{2})\b/) : null);
+  const elevationMatch =
+    normalized.match(/(?:总爬升高度|累计爬升).{0,50}?(\d{1,4})\s*(?:米|m\b)/i) ??
+    (hasOverviewMarkers ? normalized.match(/平均功率.{0,12}?(\d{1,4})\s*(?:米|K)(?=\s+\d{2,4})/) : null);
   const paceSection = sectionAfterLabel(normalized, /(?:平均配速|配速)/, ["平均心率", "平均步频", "平均功率", "环境"]);
   const heartRateSection = sectionAfterLabel(normalized, /(?:平均心率|心率)/, ["平均步频", "平均功率", "平均配速", "环境"]);
   const cadenceSection = sectionAfterLabel(normalized, /(?:平均步频|步频)/, ["平均配速", "平均心率", "平均功率", "环境"]);
@@ -367,6 +419,7 @@ export function extractRunDraftFromText(text: string, referenceDate = new Date()
   if (dateTime) result.dateTime = dateTime;
   if (distanceMatch) result.distanceKm = distanceMatch[1];
   if (durationMatch) result.duration = normalizeDurationToken(durationMatch[1]);
+  if (elevationMatch) result.elevationGainM = elevationMatch[1];
   if (paceValue) result.avgPace = paceValue;
   const heartRate = metricInRange(heartRateSection, 60, 220);
   const cadence = extractCadenceValue(normalized, cadenceSection);

@@ -7,6 +7,7 @@ import type {
   SmartPredictionFactor,
   SmartPredictionSummary
 } from "./types";
+import { runLocalDate } from "./runDates";
 import { analyzeRunSplits, buildHeartRateBaseline, buildSplitAnalytics } from "./physiology";
 import {
   buildVdotModel,
@@ -188,12 +189,13 @@ function buildPerformanceCandidates(
     const recencyWeight = Math.max(0.12, Math.exp(-daysOld / 180));
     const distanceWeight = Math.max(0.15, Math.exp(-1.55 * Math.abs(Math.log(distanceKm / targetDistanceKm))));
     const weatherWeight = weatherReliability(run);
-    const powerCoverage = run.splits.length > 0
-      ? run.splits.filter((split) => split.powerW > 0).length / run.splits.length
+    const fullSplits = run.splits.filter((split) => split.kind !== "tail");
+    const powerCoverage = fullSplits.length > 0
+      ? fullSplits.filter((split) => split.powerW > 0).length / fullSplits.length
       : run.avgPowerW > 0 ? 1 : 0;
     const powerWeight = powerCoverage >= 0.5 ? 1.08 : 1;
-    const cadenceValues = run.splits.map((split) => split.cadenceSpm).filter((value) => value > 0);
-    const cadenceCoverage = run.splits.length > 0 ? cadenceValues.length / run.splits.length : run.avgCadenceSpm > 0 ? 1 : 0;
+    const cadenceValues = fullSplits.map((split) => split.cadenceSpm).filter((value) => value > 0);
+    const cadenceCoverage = fullSplits.length > 0 ? cadenceValues.length / fullSplits.length : run.avgCadenceSpm > 0 ? 1 : 0;
     const cadenceMean = cadenceValues.length > 0 ? cadenceValues.reduce((sum, value) => sum + value, 0) / cadenceValues.length : null;
     const cadenceVariation = cadenceMean && cadenceValues.length >= 2
       ? Math.sqrt(cadenceValues.reduce((sum, value) => sum + (value - cadenceMean) ** 2, 0) / cadenceValues.length) / cadenceMean
@@ -321,7 +323,7 @@ function buildNearTargetLongRunPrediction(
       evidenceScore: blendWeight * coverage,
       prediction: {
         sourceRunId: run.id,
-        sourceDate: run.dateTime.slice(0, 10),
+        sourceDate: runLocalDate(run),
         sourceDistanceKm: run.distanceKm,
         supportingRunCount: 1,
         coveragePercent: coverage * 100,

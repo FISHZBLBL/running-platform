@@ -100,13 +100,27 @@ describe("buildPrediction", () => {
     const runs = [
       run({ dateTime: "2026-01-01T00:00:00.000Z", distanceKm: 5.01, avgPaceSecPerKm: 360 }),
       run({ dateTime: "2026-01-08T00:00:00.000Z", distanceKm: 6.01, avgPaceSecPerKm: 350 }),
-      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 1.55, avgPaceSecPerKm: 330 })
+      run({ dateTime: "2026-01-15T00:00:00.000Z", distanceKm: 1.55, avgPaceSecPerKm: 330 }),
+      run({
+        dateTime: "2026-01-22T00:00:00.000Z",
+        distanceKm: 3.04,
+        avgPaceSecPerKm: 360,
+        splits: [330, 335, 340].map((paceSecPerKm, index) => ({
+          index: index + 1,
+          distanceKm: 1,
+          paceSecPerKm,
+          heartRateBpm: 160,
+          powerW: 210,
+          cadenceSpm: 170
+        }))
+      })
     ];
     const prediction = buildPrediction(runs, [], 5);
     const pbKeys = prediction.vdotModel.personalBests.map((pb) => pb.key);
     expect(pbKeys).toContain("1500m");
     expect(pbKeys).toContain("5km");
-    expect(pbKeys).not.toContain("3km");
+    expect(pbKeys).toContain("3km");
+    expect(prediction.vdotModel.personalBests.filter((pb) => pb.key === "1500m")).toHaveLength(1);
   });
 
   it("calculates weight and pace correlation when dates are close", () => {
@@ -145,7 +159,15 @@ describe("buildPrediction", () => {
     const backtest = buildPredictionBacktest(runs, []);
     expect(backtest.status).toBe("ready");
     expect(backtest.sampleCount).toBe(1);
-    expect(backtest.entries[0]).toMatchObject({ runId: "pb-4", benchmarkType: "pb", benchmarkLabel: "5km PB" });
+    expect(backtest.entries[0]).toMatchObject({
+      runId: "pb-4",
+      benchmarkType: "pb",
+      benchmarkLabel: "5km PB",
+      inputRunCount: 3,
+      performanceSampleCount: 1,
+      calibrationSampleCount: 0
+    });
+    expect(backtest.entries[0].smartConfidenceScore).toBeGreaterThan(0);
   });
 
   it("backtests a marked race even when it is not a PB", () => {
@@ -160,8 +182,8 @@ describe("buildPrediction", () => {
     expect(backtest.entries[0]).toMatchObject({ runId: "race", benchmarkType: "race", benchmarkLabel: "5km比赛" });
   });
 
-  it("derives a standard-distance PB from complete splits in a longer run", () => {
-    const splitPaces = [370, 365, 360, 355, 350, 420];
+  it("does not derive shorter-distance PBs from splits", () => {
+    const splitPaces = [330, 335, 340, 345, 350, 355];
     const splitRun = run({
       id: "split-pb",
       dateTime: "2026-01-15T00:00:00.000Z",
@@ -182,8 +204,155 @@ describe("buildPrediction", () => {
       splitRun
     ], [], 5);
     const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
-    expect(fiveKmPb?.sourceRunId).toBe("split-pb");
-    expect(fiveKmPb?.estimatedDurationSec).toBe(1800);
+    expect(fiveKmPb).toBeUndefined();
+  });
+
+  it("rejects split-derived pace when an OCR error makes it implausibly fast", () => {
+    const recordedPaceSecPerKm = 6 * 60 + 17;
+    const runs = [
+      run({ dateTime: "2026-06-01T00:00:00.000Z", distanceKm: 3.04, avgPaceSecPerKm: 400 }),
+      run({
+        id: "june-24-5km",
+        dateTime: "2026-06-24T00:00:00.000Z",
+        distanceKm: 5.03,
+        durationSec: 31 * 60 + 38,
+        avgPaceSecPerKm: recordedPaceSecPerKm,
+        splits: [365, 375, 325, 375, 380].map((paceSecPerKm, index) => ({
+          index: index + 1,
+          distanceKm: 1,
+          paceSecPerKm,
+          heartRateBpm: 170,
+          powerW: 220,
+          cadenceSpm: 170
+        }))
+      }),
+      run({ dateTime: "2026-07-01T00:00:00.000Z", distanceKm: 10.02, avgPaceSecPerKm: 410 })
+    ];
+
+    const prediction = buildPrediction(runs, [], 5);
+    const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
+    expect(fiveKmPb).toMatchObject({
+      sourceRunId: "june-24-5km",
+      sourceDate: "2026-06-24",
+      sourceDistanceKm: 5.03,
+      paceSecPerKm: recordedPaceSecPerKm,
+      estimatedDurationSec: recordedPaceSecPerKm * 5
+    });
+  });
+
+  it("uses trustworthy splits to exclude a slow partial tail from a near-standard run", () => {
+    const recordedPaceSecPerKm = 6 * 60 + 17;
+    const splitPaces = [374, 376, 375, 377, 376];
+    const runs = [
+      run({ dateTime: "2026-06-01T00:00:00.000Z", distanceKm: 3.04, avgPaceSecPerKm: 400 }),
+      run({
+        id: "valid-split-5km",
+        dateTime: "2026-06-24T00:00:00.000Z",
+        distanceKm: 5.03,
+        durationSec: 31 * 60 + 38,
+        avgPaceSecPerKm: recordedPaceSecPerKm,
+        splits: splitPaces.map((paceSecPerKm, index) => ({
+          index: index + 1,
+          distanceKm: 1,
+          paceSecPerKm,
+          heartRateBpm: 170,
+          powerW: 220,
+          cadenceSpm: 170
+        }))
+      }),
+      run({ dateTime: "2026-07-01T00:00:00.000Z", distanceKm: 10.02, avgPaceSecPerKm: 410 })
+    ];
+
+    const prediction = buildPrediction(runs, [], 5);
+    const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
+    expect(fiveKmPb?.sourceRunId).toBe("valid-split-5km");
+    expect(fiveKmPb?.estimatedDurationSec).toBe(splitPaces.reduce((sum, pace) => sum + pace, 0));
+    expect(fiveKmPb?.paceSecPerKm).toBeCloseTo(375.6, 5);
+  });
+
+  it("uses total duration minus a time-only tail for an integer-distance PB", () => {
+    const fullSplitPaces = [352, 386, 375, 387, 356];
+    const tailAdjustedRun = run({
+      id: "tail-adjusted-5km",
+      dateTime: "2026-07-17T00:00:00.000Z",
+      distanceKm: 5.01,
+      durationSec: 1863,
+      avgPaceSecPerKm: 1863 / 5.01,
+      splits: [
+        ...fullSplitPaces.map((paceSecPerKm, index) => ({
+          index: index + 1,
+          distanceKm: 1,
+          paceSecPerKm,
+          heartRateBpm: 165,
+          powerW: 220,
+          cadenceSpm: 170
+        })),
+        {
+          index: 6,
+          kind: "tail" as const,
+          durationSec: 3,
+          distanceKm: 0,
+          paceSecPerKm: 0,
+          heartRateBpm: 0,
+          powerW: 0,
+          cadenceSpm: 0
+        }
+      ]
+    });
+
+    const prediction = buildPrediction([
+      run({ dateTime: "2026-07-01T00:00:00.000Z", distanceKm: 3 }),
+      run({ dateTime: "2026-07-08T00:00:00.000Z", distanceKm: 4 }),
+      tailAdjustedRun
+    ], [], 5);
+    const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
+
+    expect(fullSplitPaces.reduce((sum, pace) => sum + pace, 0)).toBe(1856);
+    expect(fiveKmPb?.sourceRunId).toBe("tail-adjusted-5km");
+    expect(fiveKmPb?.estimatedDurationSec).toBe(1860);
+    expect(fiveKmPb?.paceSecPerKm).toBe(372);
+  });
+
+  it("matches the supplied Apple Watch five-kilometer splits plus 15-second tail", () => {
+    const fullSplitPaces = [382, 407, 418, 421, 436];
+    const totalDurationSec = 2079;
+    const screenshotRun = run({
+      id: "apple-watch-tail-example",
+      dateTime: "2026-07-17T01:00:00.000Z",
+      distanceKm: 5.04,
+      durationSec: totalDurationSec,
+      avgPaceSecPerKm: totalDurationSec / 5.04,
+      splits: [
+        ...fullSplitPaces.map((paceSecPerKm, index) => ({
+          index: index + 1,
+          distanceKm: 1,
+          paceSecPerKm,
+          heartRateBpm: [160, 172, 173, 174, 173][index],
+          powerW: [237, 223, 217, 216, 211][index],
+          cadenceSpm: [168, 167, 168, 168, 162][index]
+        })),
+        {
+          index: 6,
+          kind: "tail" as const,
+          durationSec: 15,
+          distanceKm: 0,
+          paceSecPerKm: 0,
+          heartRateBpm: 0,
+          powerW: 0,
+          cadenceSpm: 0
+        }
+      ]
+    });
+
+    const prediction = buildPrediction([
+      run({ dateTime: "2026-07-01T00:00:00.000Z", distanceKm: 3 }),
+      run({ dateTime: "2026-07-08T00:00:00.000Z", distanceKm: 4 }),
+      screenshotRun
+    ], [], 5);
+    const fiveKmPb = prediction.vdotModel.personalBests.find((pb) => pb.key === "5km");
+
+    expect(fiveKmPb?.estimatedDurationSec).toBe(totalDurationSec - 15);
+    expect(fiveKmPb?.paceSecPerKm).toBe(412.8);
   });
 
   it("does not let a future PB change an earlier walk-forward result", () => {

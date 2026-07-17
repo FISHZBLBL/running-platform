@@ -15,7 +15,8 @@
 .shoe-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(230px, 280px));
+  justify-content: start;
 }
 
 .shoe-card {
@@ -156,7 +157,8 @@
 
 @media (max-width: 900px) {
   .shoe-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(220px, 280px));
+    justify-content: start;
   }
 
   .shoe-form {
@@ -185,6 +187,7 @@
   .shoe-grid {
     gap: 10px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    justify-content: stretch;
   }
 
   .shoe-form {

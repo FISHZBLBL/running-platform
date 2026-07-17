@@ -10,6 +10,7 @@ import type {
   TrendLine,
   WeightRecord
 } from "./types";
+import { runLocalDate } from "./runDates";
 import {
   buildSmartPrediction,
   DEFAULT_PERSONAL_PREDICTION_WEIGHTS,
@@ -148,7 +149,7 @@ function addDays(dateTime: string, days: number): string {
 function progressiveDistanceDate(sortedRuns: RunningRecord[], targetDistanceKm: number): string | null {
   const longestRun = sortedRuns.reduce<RunningRecord | null>((best, run) => (!best || run.distanceKm > best.distanceKm ? run : best), null);
   if (!longestRun || targetDistanceKm <= longestRun.distanceKm) {
-    return longestRun?.dateTime.slice(0, 10) ?? null;
+    return longestRun ? runLocalDate(longestRun) : null;
   }
 
   const distanceGapRatio = targetDistanceKm / longestRun.distanceKm;
@@ -182,7 +183,7 @@ export function buildPrediction(
   const sortedRuns = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
   const longestDistanceKm = sortedRuns.reduce((max, run) => Math.max(max, run.distanceKm), 0);
   const achievedRun = sortedRuns.find((run) => run.distanceKm >= targetDistanceKm);
-  const achievedTargetDate = achievedRun?.dateTime.slice(0, 10) ?? null;
+  const achievedTargetDate = achievedRun ? runLocalDate(achievedRun) : null;
   const vdotModel = buildVdotModel(sortedRuns);
   if (sortedRuns.length < 3) {
     return {
@@ -226,7 +227,7 @@ export function buildPrediction(
   const distanceTrend = linearRegression(distancePoints);
   const heartRateTrend = linearRegression(heartRatePoints);
 
-  const latestRunDate = sortedRuns[sortedRuns.length - 1].dateTime.slice(0, 10);
+  const latestRunDate = runLocalDate(sortedRuns[sortedRuns.length - 1]);
   const vdotPredictedFinishRangeSec =
     vdotModel.range && vdotModel.conservativeVdot
       ? {
@@ -611,10 +612,14 @@ export function buildPredictionBacktest(
     if (!vdotPredictedFinishSec || !smartPrediction) continue;
     entries.push({
       runId: target.run.id,
-      date: target.run.dateTime.slice(0, 10),
+      date: runLocalDate(target.run),
       distanceKm: target.distanceKm,
       benchmarkType: target.benchmarkType,
       benchmarkLabel: target.benchmarkLabel,
+      inputRunCount: priorRuns.length,
+      performanceSampleCount: smartPrediction.performanceSampleCount,
+      calibrationSampleCount: smartPrediction.calibrationSampleCount,
+      smartConfidenceScore: smartPrediction.confidenceScore,
       vdotPredictedFinishSec,
       smartPredictedFinishSec: smartPrediction.predictedFinishSec,
       actualFinishSec: target.durationSec,

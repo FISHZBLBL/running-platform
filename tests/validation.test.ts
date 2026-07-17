@@ -43,6 +43,63 @@ describe("validation", () => {
     expect(run.effortSource).toBe("apple-watch");
     expect(run.performanceType).toBe("race");
     expect(run.elevationGainM).toBe(120);
+    expect(run.localDate).toBe("2026-01-01");
+  });
+
+  it("backfills a legacy morning run with its Shanghai calendar date", () => {
+    const run = validateRunPayload({
+      id: "morning-run",
+      dateTime: "2026-07-13T23:32:00.000Z",
+      shoeId: null,
+      distanceKm: 5,
+      durationSec: 2177,
+      avgPowerW: 208,
+      avgCadenceSpm: 165,
+      avgHeartRateBpm: 159,
+      weather: { temperatureC: null, humidityPct: null, aqi: null },
+      notes: "",
+      splits: [],
+      screenshotKeys: []
+    });
+
+    expect(run.localDate).toBe("2026-07-14");
+  });
+
+  it("accepts a time-only tail split without requiring pace or sensor metrics", () => {
+    const run = validateRunPayload({
+      id: "tail-split-run",
+      dateTime: "2026-07-16T14:07:00.000Z",
+      distanceKm: 5.01,
+      durationSec: 1853,
+      avgPaceSecPerKm: 369,
+      avgPowerW: 248,
+      avgCadenceSpm: 166,
+      avgHeartRateBpm: 174,
+      weather: {},
+      notes: "",
+      screenshotKeys: [],
+      splits: [{
+        index: 6,
+        kind: "tail",
+        durationSec: 3,
+        distanceKm: 999,
+        paceSecPerKm: 999,
+        heartRateBpm: 999,
+        powerW: 999,
+        cadenceSpm: 999
+      }]
+    });
+
+    expect(run.splits).toEqual([{
+      index: 6,
+      kind: "tail",
+      durationSec: 3,
+      distanceKm: 0,
+      paceSecPerKm: 0,
+      heartRateBpm: 0,
+      powerW: 0,
+      cadenceSpm: 0
+    }]);
   });
 
   it("normalizes a runner profile", () => {

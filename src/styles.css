@@ -951,6 +951,16 @@ input[type="datetime-local"] {
   text-align: center;
 }
 
+.tail-split-row {
+  grid-template-columns: 56px minmax(120px, 220px) minmax(260px, 1fr) minmax(64px, auto);
+  min-width: 560px;
+}
+
+.tail-split-note {
+  color: #64748b;
+  font-size: 0.88rem;
+}
+
 .split-delete-button {
   min-height: 42px;
   padding: 8px 10px;
@@ -2594,6 +2604,61 @@ textarea:focus {
   }
 }
 
+/* 2026-07 mobile VDOT PB density refinement. */
+@media (max-width: 620px) {
+  .vdot-summary-panel {
+    row-gap: 0;
+  }
+
+  .vdot-summary-panel .panel-heading {
+    margin-bottom: 10px;
+    padding-bottom: 10px;
+  }
+
+  .vdot-summary-grid {
+    margin-bottom: 8px;
+  }
+
+  .pb-grid {
+    gap: 7px;
+  }
+
+  .pb-card {
+    align-items: center;
+    gap: 2px 8px;
+    grid-template-columns: 48px 68px minmax(0, 1fr);
+    grid-template-rows: repeat(2, auto);
+    padding: 8px 10px;
+  }
+
+  .pb-card > span {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .pb-card > strong {
+    font-size: 18px;
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+
+  .pb-card > small {
+    font-size: 10px;
+    line-height: 1.3;
+    min-width: 0;
+  }
+
+  .pb-card > small:first-of-type {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .pb-card > small:last-of-type {
+    grid-column: 3;
+    grid-row: 2;
+  }
+}
+
 /* 2026-07 prediction workspace fusion redesign */
 @media (min-width: 901px) {
   .prediction-control-panel {
@@ -3019,22 +3084,158 @@ textarea:focus {
   color: var(--positive);
 }
 
-.backtest-compact-list {
+.backtest-latest-list {
   border-top: 1px solid var(--line-soft);
   display: grid;
   margin-top: 12px;
 }
 
-.backtest-compact-list > div {
-  display: flex;
-  font-size: 9px;
-  gap: 10px;
-  justify-content: space-between;
-  padding: 7px 0;
+.backtest-latest-row {
+  border-bottom: 1px solid var(--line-soft);
+  display: grid;
+  gap: 5px;
+  padding: 9px 0;
 }
 
-.backtest-compact-list span {
+.backtest-latest-row > span {
   color: #718095;
+  font-size: 9px;
+}
+
+.backtest-latest-row > div {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.backtest-latest-row > div span {
+  color: #65758a;
+  font-size: 9px;
+}
+
+.backtest-latest-row > div strong {
+  color: #17283f;
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.backtest-latest-row > small {
+  color: var(--positive);
+  font-size: 9px;
+}
+
+.backtest-history {
+  border-bottom: 1px solid var(--line-soft);
+  margin-top: 9px;
+}
+
+.backtest-history > summary {
+  color: #34465d;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 750;
+  min-height: 36px;
+  padding: 11px 3px 9px;
+}
+
+.backtest-history > summary > strong {
+  color: var(--primary);
+  float: right;
+  font-size: 10px;
+}
+
+.backtest-history > p {
+  color: #718095;
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 0;
+  padding: 2px 3px 10px;
+}
+
+.backtest-history-list {
+  border-top: 1px solid var(--line-soft);
+}
+
+.backtest-history-row {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px 3px;
+}
+
+.backtest-history-row:last-child {
+  border-bottom: 0;
+}
+
+.backtest-history-row header {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.backtest-history-row header span {
+  color: #718095;
+  font-size: 9px;
+}
+
+.backtest-history-row header strong {
+  color: #26384f;
+  font-size: 10px;
+}
+
+.backtest-history-values {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 9px;
+}
+
+.backtest-history-values > div {
+  border-left: 2px solid var(--line);
+  min-width: 0;
+  padding-left: 7px;
+}
+
+.backtest-history-values > div:nth-child(2) {
+  border-color: var(--positive);
+}
+
+.backtest-history-values > div:nth-child(3) {
+  border-color: var(--primary);
+}
+
+.backtest-history-values span,
+.backtest-history-values strong {
+  display: block;
+}
+
+.backtest-history-values span {
+  color: #718095;
+  font-size: 8px;
+}
+
+.backtest-history-values strong {
+  color: #17283f;
+  font-size: 11px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.backtest-history-error,
+.backtest-history-inputs {
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+
+.backtest-history-error {
+  color: var(--positive);
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.backtest-history-inputs {
+  color: #718095;
+  font-size: 8px;
 }
 
 .prediction-coach-rail {

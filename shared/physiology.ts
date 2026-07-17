@@ -1,4 +1,5 @@
 import type { RunnerProfile, RunningRecord, RunSplit } from "./types";
+import { runLocalDate } from "./runDates";
 
 const DAY_MS = 86_400_000;
 const OBSERVATION_WINDOW_DAYS = 365;
@@ -306,7 +307,7 @@ export function buildSplitAnalytics(runs: RunningRecord[]): SplitAnalytics {
     }
     splitRuns.push({
       runId: run.id,
-      date: run.dateTime.slice(0, 10),
+      date: runLocalDate(run),
       distanceKm: totalDistance,
       splitCount: splits.length,
       paceSecPerKm: totalDuration / totalDistance,
