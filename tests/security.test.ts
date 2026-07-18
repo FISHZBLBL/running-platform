@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { inviteCode } from "../netlify/functions/_shared/env";
 import { requireJsonRequest, requireSameOrigin } from "../netlify/functions/_shared/responses";
-import { config as authConfig } from "../netlify/functions/auth";
+import auth, { config as authConfig } from "../netlify/functions/auth";
 import { config as uploadConfig } from "../netlify/functions/uploads";
 
 const originalInviteCode = process.env.INVITE_CODE;
@@ -43,9 +43,22 @@ describe("production request security", () => {
     expect(() => requireJsonRequest(formPost)).toThrow(/application\/json/);
   });
 
-  it("defines edge rate limits for login, registration and screenshot uploads", () => {
-    expect(authConfig.path).toEqual(["/api/auth/login", "/api/auth/register"]);
+  it("uses one rate-limit rule for all authentication actions and one for uploads", () => {
+    expect(authConfig.path).toBe("/api/auth/:action");
     expect(authConfig.rateLimit).toMatchObject({ windowLimit: 10, windowSize: 60 });
     expect(uploadConfig.rateLimit).toMatchObject({ windowLimit: 12, windowSize: 60 });
+  });
+
+  it("logs out through the consolidated authentication route", async () => {
+    const response = await auth(
+      new Request("https://running-platform.netlify.app/api/auth/logout", {
+        method: "POST",
+        headers: { Origin: "https://running-platform.netlify.app" }
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toContain("Max-Age=0");
+    await expect(response.json()).resolves.toEqual({ ok: true });
   });
 });

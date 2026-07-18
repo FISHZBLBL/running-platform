@@ -1,7 +1,7 @@
 import type { Config } from "@netlify/functions";
 import { isValidUsername, normalizeUsername } from "../../shared/cosKeys";
 import type { UserProfile } from "../../shared/types";
-import { comparePassword, hashPassword, sessionCookie } from "./_shared/auth";
+import { clearSessionCookie, comparePassword, hashPassword, sessionCookie } from "./_shared/auth";
 import { createProfile, getProfile } from "./_shared/data";
 import { inviteCode } from "./_shared/env";
 import {
@@ -80,12 +80,24 @@ async function register(req: Request): Promise<Response> {
   );
 }
 
+function logout(): Response {
+  return json(
+    { ok: true },
+    {
+      headers: {
+        "Set-Cookie": clearSessionCookie()
+      }
+    }
+  );
+}
+
 export default async function auth(req: Request): Promise<Response> {
   try {
     if (req.method !== "POST") return methodNotAllowed();
     requireSameOrigin(req);
-    requireJsonRequest(req);
     const pathname = new URL(req.url).pathname;
+    if (pathname === "/api/auth/logout") return logout();
+    requireJsonRequest(req);
     if (pathname === "/api/auth/login") return login(req);
     if (pathname === "/api/auth/register") return register(req);
     return json({ error: "认证接口不存在。" }, { status: 404 });
@@ -95,7 +107,7 @@ export default async function auth(req: Request): Promise<Response> {
 }
 
 export const config: Config = {
-  path: ["/api/auth/login", "/api/auth/register"],
+  path: "/api/auth/:action",
   rateLimit: {
     windowLimit: 10,
     windowSize: 60,
