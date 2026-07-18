@@ -113,4 +113,4 @@ export const config: Config = {
     windowSize: 60,
     aggregateBy: ["ip", "domain"]
   }
-} as Config;
+};
