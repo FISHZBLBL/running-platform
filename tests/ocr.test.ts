@@ -186,6 +186,64 @@ describe("Apple Watch split screenshot merging", () => {
     ]);
   });
 
+  it("recognizes the supplied 5.26-km run's 1:45 sixth row as a distance-consistent time-only tail", () => {
+    const text = `
+      单段 1.00公里
+      心率 功率 步频
+      1 141次/分 240瓦 168步/分
+      2 155次/分 228瓦 164步/分
+      3 158次/分 208瓦 165步/分
+      4 163次/分 217瓦 166步/分
+      5 170次/分 226瓦 167步/分
+      6 170次/分 235瓦 165步/分
+      单段 1.00公里
+      时间 配速 心率 功率
+      1 06:20 6'20"/公里 141次/分 240瓦
+      2 06:37 6'37"/公里 155次/分 228瓦
+      3 07:17 7'17"/公里 158次/分 208瓦
+      4 06:59 6'59"/公里 163次/分 217瓦
+      5 06:40 6'40"/公里 170次/分 226瓦
+      6 01:45 6'34"/公里 170次/分 235瓦
+    `;
+
+    const result = extractSplitsFromText(text, 5.26);
+
+    expect(result.detectedCount).toBe(6);
+    expect(result.droppedIndexes).toEqual([]);
+    expect(result.incompleteIndexes).toEqual([]);
+    expect(result.tailIndex).toBe(6);
+    expect(result.tailDuration).toBe("01:45");
+    expect(result.splits.slice(0, 5).map((split) => split.pace)).toEqual(["6:20", "6:37", "7:17", "6:59", "6:40"]);
+    expect(result.splits[5]).toEqual({
+      kind: "tail",
+      duration: "01:45",
+      distanceKm: "",
+      pace: "",
+      heartRateBpm: "",
+      powerW: "",
+      cadenceSpm: ""
+    });
+  });
+
+  it("rejects a long extra row when its time does not match the remaining fractional distance", () => {
+    const text = `
+      单段 1.00公里
+      时间 配速 心率 功率
+      1 05:52 5'52"/公里 150次/分 220瓦
+      2 06:26 6'26"/公里 155次/分 215瓦
+      3 06:15 6'15"/公里 158次/分 218瓦
+      4 06:27 6'27"/公里 160次/分 214瓦
+      5 05:56 5'56"/公里 162次/分 225瓦
+      6 06:10 6'10"/公里 164次/分 226瓦
+    `;
+
+    const result = extractSplitsFromText(text, 5.26);
+
+    expect(result.splits).toHaveLength(5);
+    expect(result.tailDuration).toBeUndefined();
+    expect(result.droppedIndexes).toEqual([6]);
+  });
+
   it("keeps the existing rejection behavior when an extra row is not a short tail", () => {
     const text = `
       单段 1.00公里

@@ -300,35 +300,72 @@ function mergeSplitLists(primary: SplitDraft[], secondary: SplitDraft[]): Map<nu
   return splitMap;
 }
 
-function extractTailSplit(text: string, fullSplitCount: number): { index: number; split: SplitDraft } | null {
+function isPlausibleTailDuration(
+  durationSec: number,
+  pace: string | null,
+  totalDistanceKm: number,
+  fullSplitCount: number
+): boolean {
+  // 保留原有短尾段规则，避免改变已经支持的 00:06、00:55 等场景。
+  if (durationSec < 60) return true;
+
+  const fractionalDistanceKm = totalDistanceKm - fullSplitCount;
+  if (fractionalDistanceKm < 0.01 || fractionalDistanceKm >= 1) return false;
+
+  const impliedPaceSecPerKm = durationSec / fractionalDistanceKm;
+  if (impliedPaceSecPerKm < 120 || impliedPaceSecPerKm > 900) return false;
+
+  const paceSecPerKm = pace ? clockToSeconds(pace) : null;
+  if (paceSecPerKm === null) return true;
+  const expectedDurationSec = paceSecPerKm * fractionalDistanceKm;
+  const toleranceSec = Math.max(8, expectedDurationSec * 0.12);
+  return Math.abs(durationSec - expectedDurationSec) <= toleranceSec;
+}
+
+function extractTailSplit(
+  text: string,
+  fullSplitCount: number,
+  totalDistanceKm: number
+): { index: number; split: SplitDraft } | null {
   if (fullSplitCount < 1) return null;
   const normalized = normalizeSplitText(text);
   const rowPattern = /(?:^|\n)\s*(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*次))/g;
   const rows = [...normalized.matchAll(rowPattern)].map((match) => ({ index: Number(match[1]), start: match.index ?? 0 }));
   const expectedIndex = fullSplitCount + 1;
-  const rowPosition = rows.findIndex((row) => row.index === expectedIndex);
-  if (rowPosition < 0) return null;
+  const candidatePositions = rows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row.index === expectedIndex);
 
-  const row = rows[rowPosition];
-  const next = rows[rowPosition + 1]?.start ?? normalized.length;
-  const chunk = normalized.slice(row.start, next);
-  const time = chunk.match(/\b(\d{1,2}:\d{2})\b/)?.[1];
-  if (!time) return null;
-  const durationSec = clockToSeconds(time);
-  if (durationSec === null || durationSec <= 0 || durationSec >= 60) return null;
-
-  return {
-    index: expectedIndex,
-    split: {
-      kind: "tail",
-      duration: normalizeDurationToken(time),
-      distanceKm: "",
-      pace: "",
-      heartRateBpm: "",
-      powerW: "",
-      cadenceSpm: ""
+  for (const { row, index } of candidatePositions) {
+    const next = rows[index + 1]?.start ?? normalized.length;
+    const chunk = normalized.slice(row.start, next);
+    const time = chunk.match(/\b(\d{1,2}:\d{2})\b/)?.[1];
+    if (!time) continue;
+    const durationSec = clockToSeconds(time);
+    const pace = extractPaceValue(chunk, chunk);
+    if (
+      durationSec === null ||
+      durationSec <= 0 ||
+      !isPlausibleTailDuration(durationSec, pace, totalDistanceKm, fullSplitCount)
+    ) {
+      continue;
     }
-  };
+
+    return {
+      index: expectedIndex,
+      split: {
+        kind: "tail",
+        duration: normalizeDurationToken(time),
+        distanceKm: "",
+        pace: "",
+        heartRateBpm: "",
+        powerW: "",
+        cadenceSpm: ""
+      }
+    };
+  }
+
+  return null;
 }
 
 export function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrResult {
@@ -340,7 +377,7 @@ export function extractSplitsFromText(text: string, totalDistanceKm: number): Sp
       ? rowMap
       : mergeSplitLists(parseTimePaceHeartSplits(lines), parseEffortSplits(lines));
   const detectedIndexes = [...splitMap.keys()].sort((a, b) => a - b);
-  const tail = extractTailSplit(text, fullSplitCount);
+  const tail = extractTailSplit(text, fullSplitCount, totalDistanceKm);
   const droppedIndexes = detectedIndexes.filter(
     (index) => fullSplitCount > 0 && index > fullSplitCount && index !== tail?.index
   );
