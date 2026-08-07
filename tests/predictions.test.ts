@@ -355,6 +355,56 @@ describe("buildPrediction", () => {
     expect(fiveKmPb?.paceSecPerKm).toBe(412.8);
   });
 
+  it("builds PB progression history and keeps races that did not set a PB", () => {
+    const sensorValues = {
+      heartRate: [160, 162, 164, 166, 168],
+      power: [200, 210, 220, 230, 240],
+      cadence: [165, 166, 167, 168, 169]
+    };
+    const runs = [
+      run({ id: "first-pb", dateTime: "2026-06-01T00:00:00.000Z", distanceKm: 5.01, durationSec: 2000, avgPaceSecPerKm: 400 }),
+      run({ id: "second-pb", dateTime: "2026-06-08T00:00:00.000Z", distanceKm: 5.01, durationSec: 1950, avgPaceSecPerKm: 390 }),
+      run({ id: "non-pb-race", dateTime: "2026-06-15T00:00:00.000Z", distanceKm: 5.01, durationSec: 1980, avgPaceSecPerKm: 396, performanceType: "race", effortScore: 8 }),
+      run({ id: "ordinary-slower", dateTime: "2026-06-22T00:00:00.000Z", distanceKm: 5.01, durationSec: 2100, avgPaceSecPerKm: 420 }),
+      run({
+        id: "current-pb",
+        dateTime: "2026-06-29T00:00:00.000Z",
+        distanceKm: 5.01,
+        durationSec: 1903,
+        avgPaceSecPerKm: 1903 / 5.01,
+        avgHeartRateBpm: 140,
+        avgPowerW: 180,
+        avgCadenceSpm: 150,
+        effortScore: 6,
+        splits: [
+          ...Array.from({ length: 5 }, (_value, index) => ({
+            index: index + 1,
+            distanceKm: 1,
+            paceSecPerKm: 380,
+            heartRateBpm: sensorValues.heartRate[index],
+            powerW: sensorValues.power[index],
+            cadenceSpm: sensorValues.cadence[index]
+          })),
+          { index: 6, kind: "tail" as const, durationSec: 3, distanceKm: 0, paceSecPerKm: 0, heartRateBpm: 0, powerW: 0, cadenceSpm: 0 }
+        ]
+      })
+    ];
+
+    const history = buildPrediction(runs, [], 5).vdotModel.performanceHistory["5km"];
+
+    expect(history.map((entry) => entry.runId)).toEqual(["current-pb", "non-pb-race", "second-pb", "first-pb"]);
+    expect(history.find((entry) => entry.runId === "non-pb-race")).toMatchObject({ isRace: true, isPersonalBest: false, effortScore: 8 });
+    expect(history.find((entry) => entry.runId === "second-pb")?.improvementSec).toBe(50);
+    expect(history.find((entry) => entry.runId === "current-pb")).toMatchObject({
+      durationSec: 1900,
+      averageHeartRateBpm: 164,
+      averagePowerW: 220,
+      averageCadenceSpm: 167,
+      effortScore: 6,
+      isPersonalBest: true
+    });
+  });
+
   it("does not let a future PB change an earlier walk-forward result", () => {
     const history = [
       run({ id: "pb-1", dateTime: "2026-01-01T00:00:00.000Z", avgPaceSecPerKm: 390 }),

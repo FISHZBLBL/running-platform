@@ -31,8 +31,26 @@ export type VdotTableRow = {
   highlighted: boolean;
 };
 
+export type VdotPerformanceHistoryEntry = {
+  runId: string;
+  date: string;
+  key: VdotDistanceKey;
+  label: string;
+  durationSec: number;
+  paceSecPerKm: number;
+  vdot: number;
+  averageHeartRateBpm: number | null;
+  averagePowerW: number | null;
+  averageCadenceSpm: number | null;
+  effortScore: number | null;
+  isPersonalBest: boolean;
+  isRace: boolean;
+  improvementSec: number | null;
+};
+
 export type VdotModel = {
   personalBests: VdotPersonalBest[];
+  performanceHistory: Record<VdotDistanceKey, VdotPerformanceHistoryEntry[]>;
   range: { min: number; max: number } | null;
   conservativeVdot: number | null;
   table: VdotTableRow[];
@@ -220,6 +238,83 @@ function bestPerformanceForDistance(runs: RunningRecord[], distance: VdotDistanc
   return candidates[0] ?? null;
 }
 
+function metricForStandardDistance(
+  run: RunningRecord,
+  distanceKm: number,
+  select: (split: RunningRecord["splits"][number]) => number,
+  fallback: number
+): number | null {
+  let remainingKm = distanceKm;
+  let weightedTotal = 0;
+  let totalWeight = 0;
+  let metricCoveredKm = 0;
+  for (const split of run.splits ?? []) {
+    if (remainingKm <= 1e-6) break;
+    if (
+      split.kind === "tail" ||
+      !Number.isFinite(split.distanceKm) ||
+      split.distanceKm <= 0 ||
+      !Number.isFinite(split.paceSecPerKm) ||
+      split.paceSecPerKm <= 0
+    ) {
+      continue;
+    }
+    const includedDistanceKm = Math.min(remainingKm, split.distanceKm);
+    const value = select(split);
+    if (Number.isFinite(value) && value > 0) {
+      const durationWeight = includedDistanceKm * split.paceSecPerKm;
+      weightedTotal += value * durationWeight;
+      totalWeight += durationWeight;
+      metricCoveredKm += includedDistanceKm;
+    }
+    remainingKm -= includedDistanceKm;
+  }
+  const distanceToleranceKm = Math.max(0.02, distanceKm * 0.002);
+  if (remainingKm <= distanceToleranceKm && distanceKm - metricCoveredKm <= distanceToleranceKm && totalWeight > 0) {
+    return weightedTotal / totalWeight;
+  }
+  return Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+}
+
+function buildPerformanceHistory(runs: RunningRecord[]): Record<VdotDistanceKey, VdotPerformanceHistoryEntry[]> {
+  const sortedRuns = [...runs].sort((a, b) => new Date(a.dateTime).getTime() - new Date(b.dateTime).getTime());
+  return Object.fromEntries(VDOT_DISTANCES.map((distance) => {
+    let bestDurationSec: number | null = null;
+    const entries: VdotPerformanceHistoryEntry[] = [];
+    for (const run of sortedRuns) {
+      const performance = standardDistancePerformancesForRun(run).find((item) => item.key === distance.key);
+      if (!performance) continue;
+      const previousBestDurationSec = bestDurationSec;
+      const isPersonalBest = previousBestDurationSec === null || performance.estimatedDurationSec < previousBestDurationSec - 0.5;
+      const isRace = run.performanceType === "race" && isWithinStandardDistanceTolerance(run.distanceKm, distance.distanceKm);
+      if (previousBestDurationSec === null || performance.estimatedDurationSec < previousBestDurationSec) {
+        bestDurationSec = performance.estimatedDurationSec;
+      }
+      if (!isPersonalBest && !isRace) continue;
+
+      entries.push({
+        runId: run.id,
+        date: performance.sourceDate,
+        key: distance.key,
+        label: distance.label,
+        durationSec: performance.estimatedDurationSec,
+        paceSecPerKm: performance.paceSecPerKm,
+        vdot: performance.vdot,
+        averageHeartRateBpm: metricForStandardDistance(run, distance.distanceKm, (split) => split.heartRateBpm, run.avgHeartRateBpm),
+        averagePowerW: metricForStandardDistance(run, distance.distanceKm, (split) => split.powerW, run.avgPowerW),
+        averageCadenceSpm: metricForStandardDistance(run, distance.distanceKm, (split) => split.cadenceSpm, run.avgCadenceSpm),
+        effortScore: run.effortScore ?? null,
+        isPersonalBest,
+        isRace,
+        improvementSec: isPersonalBest && previousBestDurationSec !== null
+          ? previousBestDurationSec - performance.estimatedDurationSec
+          : null
+      });
+    }
+    return [distance.key, entries.reverse()];
+  })) as Record<VdotDistanceKey, VdotPerformanceHistoryEntry[]>;
+}
+
 export function buildVdotTable(range: { min: number; max: number } | null): VdotTableRow[] {
   const highlightMin = range ? Math.floor(range.min) : null;
   const highlightMax = range ? Math.ceil(range.max) : null;
@@ -247,6 +342,7 @@ export function buildVdotModel(runs: RunningRecord[]): VdotModel {
   const range = vdots.length ? { min: Math.min(...vdots), max: Math.max(...vdots) } : null;
   return {
     personalBests,
+    performanceHistory: buildPerformanceHistory(runs),
     range,
     conservativeVdot: range ? range.min : null,
     table: buildVdotTable(range)

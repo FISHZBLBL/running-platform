@@ -4502,6 +4502,152 @@ textarea:focus {
   color: var(--ink-strong);
 }
 
+.pb-history-group {
+  min-width: 0;
+}
+
+.pb-history-group[open] {
+  grid-column: 1 / -1;
+}
+
+.pb-history-group > summary {
+  cursor: pointer;
+  list-style: none;
+  padding-right: 38px;
+  position: relative;
+}
+
+.pb-history-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.pb-history-group > summary::after {
+  border-bottom: 2px solid #61748a;
+  border-right: 2px solid #61748a;
+  content: "";
+  height: 8px;
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-65%) rotate(45deg);
+  transition: transform 160ms ease;
+  width: 8px;
+}
+
+.pb-history-group[open] > summary {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.pb-history-group[open] > summary::after {
+  transform: translateY(-30%) rotate(225deg);
+}
+
+.pb-history-list {
+  background: #fbfcfd;
+  border: 1px solid var(--line-soft);
+  border-top: 0;
+}
+
+.pb-history-entry {
+  border-bottom: 1px solid var(--line-soft);
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.pb-history-entry:last-child {
+  border-bottom: 0;
+}
+
+.pb-history-entry header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.pb-history-entry time {
+  color: #63738a;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.pb-history-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+}
+
+.pb-history-badges span {
+  background: #e4f3f2;
+  border: 1px solid #b7dad5;
+  color: #176e65;
+  font-size: 9px;
+  font-weight: 850;
+  padding: 3px 6px;
+}
+
+.pb-history-badges .race-badge {
+  background: #fff5df;
+  border-color: #e9cb88;
+  color: #8a5a08;
+}
+
+.pb-history-performance {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.pb-history-performance strong {
+  color: var(--ink-strong);
+  font-size: 20px;
+}
+
+.pb-history-performance span {
+  color: #516176;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.pb-history-metrics {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pb-history-metrics > div {
+  border-left: 2px solid #b9c8d4;
+  min-width: 0;
+  padding-left: 8px;
+}
+
+.pb-history-metrics span,
+.pb-history-metrics strong {
+  display: block;
+}
+
+.pb-history-metrics span {
+  color: #758397;
+  font-size: 9px;
+}
+
+.pb-history-metrics strong {
+  color: #293b52;
+  font-size: 11px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.pb-history-entry footer {
+  color: #28776e;
+  font-size: 10px;
+  font-weight: 750;
+}
+
 .vdot-table-wrap {
   border: 1px solid var(--line);
   border-radius: 7px;
@@ -4837,6 +4983,14 @@ textarea:focus {
 
   .vdot-summary-panel .panel-heading {
     grid-column: 1;
+  }
+
+  .pb-history-entry {
+    padding: 12px;
+  }
+
+  .pb-history-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .weather-section,
