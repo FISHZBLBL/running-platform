@@ -1,5 +1,5 @@
 import * as echarts from "echarts";
-import { Component, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
 import {
   extractRunDraftFromText as extractRunDraftFromOcrText,
@@ -2213,7 +2213,6 @@ function VdotPage({ runs }: { runs: RunningRecord[] }) {
   const model = useMemo(() => buildVdotModel(runs), [runs]);
   const range = model.range;
   const [openPbKey, setOpenPbKey] = useState<string | null>(null);
-  const openPb = model.personalBests.find((pb) => pb.key === openPbKey) ?? null;
 
   return (
     <section className="vdot-page">
@@ -2236,66 +2235,67 @@ function VdotPage({ runs }: { runs: RunningRecord[] }) {
               const history = model.performanceHistory[pb.key];
               const isOpen = openPbKey === pb.key;
               return (
-                <button
-                  aria-expanded={isOpen}
-                  className={`pb-card${isOpen ? " pb-card-active" : ""}`}
-                  data-pb-distance={pb.key}
-                  key={pb.key}
-                  onClick={() => setOpenPbKey(isOpen ? null : pb.key)}
-                  type="button"
-                >
-                  <span>{pb.label}</span>
-                  <strong>{formatDuration(pb.estimatedDurationSec)}</strong>
-                  <small>
-                    {formatPace(pb.paceSecPerKm)} /km · VDOT {pb.vdot.toFixed(1)}
-                  </small>
-                  <small>
-                    {pb.sourceDate} · {history.length} 条历史成绩
-                  </small>
-                </button>
+                <Fragment key={pb.key}>
+                  <button
+                    aria-expanded={isOpen}
+                    className={`pb-card${isOpen ? " pb-card-active" : ""}`}
+                    data-pb-distance={pb.key}
+                    onClick={() => setOpenPbKey(isOpen ? null : pb.key)}
+                    type="button"
+                  >
+                    <span>{pb.label}</span>
+                    <strong>{formatDuration(pb.estimatedDurationSec)}</strong>
+                    <small>
+                      {formatPace(pb.paceSecPerKm)} /km · VDOT {pb.vdot.toFixed(1)}
+                    </small>
+                    <small>
+                      {pb.sourceDate} · {history.length} 条历史成绩
+                    </small>
+                  </button>
+                  {isOpen && (
+                    <div className="pb-history-drawer pb-history-drawer-open" data-pb-distance={pb.key}>
+                      <div className="pb-history-list">
+                        {history.map((entry, index) => {
+                          const isCurrentPb = entry.runId === pb.sourceRunId && Math.abs(entry.durationSec - pb.estimatedDurationSec) < 0.5;
+                          const statusText = entry.isPersonalBest
+                            ? entry.improvementSec === null
+                              ? "首个 PB"
+                              : `比上次 PB 快 ${formatDuration(entry.improvementSec)}`
+                            : "比赛成绩，未刷新 PB";
+                          return (
+                            <article
+                              className="pb-history-entry"
+                              key={entry.runId}
+                              style={{ ["--blind-index" as unknown as string]: index }}
+                            >
+                              <div className="pb-history-main">
+                                <div className="pb-history-performance">
+                                  <time dateTime={entry.date}>{entry.date}</time>
+                                  <strong>{formatDuration(entry.durationSec)}</strong>
+                                  <span>{formatPace(entry.paceSecPerKm)} /km · VDOT {entry.vdot.toFixed(1)}</span>
+                                </div>
+                                <div className="pb-history-badges">
+                                  {entry.isPersonalBest && <span>{isCurrentPb ? "当前 PB" : "PB"}</span>}
+                                  {entry.isRace && <span className="race-badge">比赛</span>}
+                                </div>
+                              </div>
+                              <div className="pb-history-metrics">
+                                <div><span>平均心率</span><strong>{entry.averageHeartRateBpm === null ? "-" : `${Math.round(entry.averageHeartRateBpm)} bpm`}</strong></div>
+                                <div><span>平均功率</span><strong>{entry.averagePowerW === null ? "-" : `${Math.round(entry.averagePowerW)} W`}</strong></div>
+                                <div><span>平均步频</span><strong>{entry.averageCadenceSpm === null ? "-" : `${Math.round(entry.averageCadenceSpm)} spm`}</strong></div>
+                                <div><span>耗能评分</span><strong>{entry.effortScore === null ? "-" : `${entry.effortScore}/10`}</strong></div>
+                              </div>
+                              <footer>{statusText}</footer>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </Fragment>
               );
             })}
             {model.personalBests.length === 0 && <p className="muted-text">保存跑步记录后，这里会根据不同标准距离 PB 估算 VDOT。</p>}
-            {openPb && (
-              <div className="pb-history-drawer pb-history-drawer-open" data-pb-distance={openPb.key}>
-                <div className="pb-history-list">
-                  {model.performanceHistory[openPb.key].map((entry, index) => {
-                    const isCurrentPb = entry.runId === openPb.sourceRunId && Math.abs(entry.durationSec - openPb.estimatedDurationSec) < 0.5;
-                    const statusText = entry.isPersonalBest
-                      ? entry.improvementSec === null
-                        ? "首个 PB"
-                        : `比上次 PB 快 ${formatDuration(entry.improvementSec)}`
-                      : "比赛成绩，未刷新 PB";
-                    return (
-                      <article
-                        className="pb-history-entry"
-                        key={entry.runId}
-                        style={{ ["--blind-index" as unknown as string]: index }}
-                      >
-                        <div className="pb-history-main">
-                          <div className="pb-history-performance">
-                            <time dateTime={entry.date}>{entry.date}</time>
-                            <strong>{formatDuration(entry.durationSec)}</strong>
-                            <span>{formatPace(entry.paceSecPerKm)} /km · VDOT {entry.vdot.toFixed(1)}</span>
-                          </div>
-                          <div className="pb-history-badges">
-                            {entry.isPersonalBest && <span>{isCurrentPb ? "当前 PB" : "PB"}</span>}
-                            {entry.isRace && <span className="race-badge">比赛</span>}
-                          </div>
-                        </div>
-                        <div className="pb-history-metrics">
-                          <div><span>平均心率</span><strong>{entry.averageHeartRateBpm === null ? "-" : `${Math.round(entry.averageHeartRateBpm)} bpm`}</strong></div>
-                          <div><span>平均功率</span><strong>{entry.averagePowerW === null ? "-" : `${Math.round(entry.averagePowerW)} W`}</strong></div>
-                          <div><span>平均步频</span><strong>{entry.averageCadenceSpm === null ? "-" : `${Math.round(entry.averageCadenceSpm)} spm`}</strong></div>
-                          <div><span>耗能评分</span><strong>{entry.effortScore === null ? "-" : `${entry.effortScore}/10`}</strong></div>
-                        </div>
-                        <footer>{statusText}</footer>
-                      </article>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </section>
