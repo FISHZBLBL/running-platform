@@ -2212,6 +2212,8 @@ function PredictionBacktestPanel({ backtest }: { backtest: PredictionBacktestRes
 function VdotPage({ runs }: { runs: RunningRecord[] }) {
   const model = useMemo(() => buildVdotModel(runs), [runs]);
   const range = model.range;
+  const [openPbKey, setOpenPbKey] = useState<string | null>(null);
+  const openPb = model.personalBests.find((pb) => pb.key === openPbKey) ?? null;
 
   return (
     <section className="vdot-page">
@@ -2229,11 +2231,19 @@ function VdotPage({ runs }: { runs: RunningRecord[] }) {
           </div>
         </div>
         <div className="pb-grid">
-          {model.personalBests.map((pb) => {
-            const history = model.performanceHistory[pb.key];
-            return (
-                <details className="pb-history-group" key={pb.key} data-pb-distance={pb.key}>
-                <summary className="pb-card">
+          <div className="pb-cards-wrapper">
+            {model.personalBests.map((pb) => {
+              const history = model.performanceHistory[pb.key];
+              const isOpen = openPbKey === pb.key;
+              return (
+                <button
+                  aria-expanded={isOpen}
+                  className={`pb-card${isOpen ? " pb-card-active" : ""}`}
+                  data-pb-distance={pb.key}
+                  key={pb.key}
+                  onClick={() => setOpenPbKey(isOpen ? null : pb.key)}
+                  type="button"
+                >
                   <span>{pb.label}</span>
                   <strong>{formatDuration(pb.estimatedDurationSec)}</strong>
                   <small>
@@ -2242,27 +2252,36 @@ function VdotPage({ runs }: { runs: RunningRecord[] }) {
                   <small>
                     {pb.sourceDate} · {history.length} 条历史成绩
                   </small>
-                </summary>
+                </button>
+              );
+            })}
+            {model.personalBests.length === 0 && <p className="muted-text">保存跑步记录后，这里会根据不同标准距离 PB 估算 VDOT。</p>}
+            {openPb && (
+              <div className="pb-history-drawer pb-history-drawer-open" data-pb-distance={openPb.key}>
                 <div className="pb-history-list">
-                  {history.map((entry) => {
-                    const isCurrentPb = entry.runId === pb.sourceRunId && Math.abs(entry.durationSec - pb.estimatedDurationSec) < 0.5;
+                  {model.performanceHistory[openPb.key].map((entry, index) => {
+                    const isCurrentPb = entry.runId === openPb.sourceRunId && Math.abs(entry.durationSec - openPb.estimatedDurationSec) < 0.5;
                     const statusText = entry.isPersonalBest
                       ? entry.improvementSec === null
                         ? "首个 PB"
                         : `比上次 PB 快 ${formatDuration(entry.improvementSec)}`
                       : "比赛成绩，未刷新 PB";
                     return (
-                      <article className="pb-history-entry" key={entry.runId}>
-                        <header>
-                          <time dateTime={entry.date}>{entry.date}</time>
+                      <article
+                        className="pb-history-entry"
+                        key={entry.runId}
+                        style={{ ["--blind-index" as unknown as string]: index }}
+                      >
+                        <div className="pb-history-main">
+                          <div className="pb-history-performance">
+                            <time dateTime={entry.date}>{entry.date}</time>
+                            <strong>{formatDuration(entry.durationSec)}</strong>
+                            <span>{formatPace(entry.paceSecPerKm)} /km · VDOT {entry.vdot.toFixed(1)}</span>
+                          </div>
                           <div className="pb-history-badges">
                             {entry.isPersonalBest && <span>{isCurrentPb ? "当前 PB" : "PB"}</span>}
                             {entry.isRace && <span className="race-badge">比赛</span>}
                           </div>
-                        </header>
-                        <div className="pb-history-performance">
-                          <strong>{formatDuration(entry.durationSec)}</strong>
-                          <span>{formatPace(entry.paceSecPerKm)} /km · VDOT {entry.vdot.toFixed(1)}</span>
                         </div>
                         <div className="pb-history-metrics">
                           <div><span>平均心率</span><strong>{entry.averageHeartRateBpm === null ? "-" : `${Math.round(entry.averageHeartRateBpm)} bpm`}</strong></div>
@@ -2275,10 +2294,9 @@ function VdotPage({ runs }: { runs: RunningRecord[] }) {
                     );
                   })}
                 </div>
-              </details>
-            );
-          })}
-          {model.personalBests.length === 0 && <p className="muted-text">保存跑步记录后，这里会根据不同标准距离 PB 估算 VDOT。</p>}
+              </div>
+            )}
+          </div>
         </div>
       </section>
 
