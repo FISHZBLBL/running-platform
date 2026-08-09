@@ -2673,6 +2673,150 @@ textarea:focus {
   }
 }
 
+/* Scientific chart system: shared hierarchy, statistical context and responsive spacing. */
+.science-chart-header {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.science-chart-title-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.science-chart-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.science-chart-copy p {
+  color: #66788c;
+  font-size: 12px;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.science-chart-metrics {
+  align-items: stretch;
+  background: #f5f8fa;
+  border-block: 1px solid #e2e9ef;
+  display: flex;
+  min-width: 0;
+}
+
+.science-chart-metric {
+  display: grid;
+  flex: 1 1 0;
+  gap: 2px;
+  min-width: 0;
+  padding: 9px 12px;
+}
+
+.science-chart-metric + .science-chart-metric {
+  border-left: 1px solid #dce5ec;
+}
+
+.science-chart-metric small {
+  color: #708095;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.science-chart-metric strong {
+  color: #34475d;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.science-chart-metric.primary strong {
+  color: #176b9c;
+}
+
+.science-chart-metric.trend strong {
+  color: #168b72;
+}
+
+.chart-block .chart {
+  background: #ffffff;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.research-chart > .chart-block,
+.science-chart-title-row,
+.science-chart-copy,
+.science-chart-metrics {
+  min-width: 0;
+}
+
+.chart-block .chart-volume-tabs {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 720px) {
+  .science-chart-title-row {
+    gap: 10px;
+  }
+
+  .science-chart-copy p {
+    font-size: 11px;
+  }
+
+  .science-chart-metrics {
+    margin-inline: -2px;
+  }
+
+  .science-chart-metric {
+    padding: 8px 6px;
+  }
+
+  .science-chart-metric small {
+    font-size: 9px;
+  }
+
+  .science-chart-metric strong {
+    font-size: 12px;
+  }
+
+  .science-chart-title-row .chart-volume-tabs {
+    padding: 3px;
+  }
+
+  .science-chart-title-row .chart-volume-tabs button {
+    min-height: 25px;
+    padding: 3px 7px;
+  }
+
+  .relation-chart,
+  .scatter-chart,
+  .volume-chart,
+  .weight-trend-chart {
+    height: 350px;
+  }
+}
+
+@media (max-width: 390px) {
+  .science-chart-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .science-chart-title-row .chart-volume-tabs {
+    align-self: flex-start;
+  }
+
+  .science-chart-metric strong {
+    font-size: 11px;
+  }
+}
+
 /* 2026-07 mobile VDOT PB density refinement. */
 @media (max-width: 620px) {
   .vdot-summary-panel {
@@ -4575,6 +4719,7 @@ textarea:focus {
 
 .pb-cards-wrapper {
   gap: 12px;
+  grid-auto-flow: row dense;
   grid-area: cards;
   margin: 0;
 }
