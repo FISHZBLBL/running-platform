@@ -2749,6 +2749,77 @@ textarea:focus {
   min-width: 0;
 }
 
+.chart-interaction-shell {
+  max-width: 100%;
+  min-width: 0;
+  position: relative;
+}
+
+.chart-interaction-surface {
+  touch-action: pan-y;
+}
+
+.chart-selection-popover {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #b8c9da;
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgba(32, 50, 71, 0.16);
+  display: flex;
+  gap: 10px;
+  max-width: min(360px, calc(100% - 16px));
+  min-height: 40px;
+  padding: 7px 9px;
+  pointer-events: none;
+  position: absolute;
+  z-index: 8;
+}
+
+.chart-selection-popover > strong {
+  color: #203247;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chart-selection-items {
+  align-items: center;
+  display: flex;
+  gap: 9px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-selection-item {
+  align-items: center;
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 7px auto;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.chart-selection-item i {
+  border-radius: 50%;
+  grid-row: 1 / span 2;
+  height: 7px;
+  margin-right: 4px;
+  width: 7px;
+}
+
+.chart-selection-item small {
+  color: #708095;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.chart-selection-item b {
+  color: #203247;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .research-chart > .chart-block,
 .science-chart-title-row,
 .science-chart-copy,
@@ -2799,6 +2870,44 @@ textarea:focus {
   .volume-chart,
   .weight-trend-chart {
     height: 350px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .chart-selection-popover {
+    left: 10px !important;
+    max-width: none;
+    right: 10px;
+    top: 42px !important;
+  }
+
+  .chart-selection-items {
+    gap: 7px;
+    justify-content: space-between;
+  }
+
+  .chart-selection-item small {
+    font-size: 8px;
+  }
+
+  .chart-selection-item b,
+  .chart-selection-popover > strong {
+    font-size: 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .chart-selection-popover {
+    gap: 7px;
+    padding-inline: 7px;
+  }
+
+  .chart-selection-items {
+    overflow: hidden;
+  }
+
+  .chart-selection-item {
+    min-width: 0;
   }
 }
 

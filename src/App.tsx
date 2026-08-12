@@ -1,6 +1,7 @@
 import * as echarts from "echarts";
-import { Component, Fragment, type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, type FormEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { classifyGestureDirection, nearestPixelIndex, type GestureDirection } from "./chartInteraction";
 import {
   extractRunDraftFromText as extractRunDraftFromOcrText,
   extractSplitsFromText as extractSplitsFromOcrText,
@@ -1335,16 +1336,6 @@ function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["data
   const start = count > visibleCount ? Math.max(0, ((count - visibleCount) / count) * 100) : 0;
   return [
     {
-      type: "inside",
-      xAxisIndex: 0,
-      start,
-      end: 100,
-      filterMode: "filter",
-      moveOnMouseMove: true,
-      moveOnMouseWheel: true,
-      zoomOnMouseWheel: false
-    },
-    {
       type: "slider",
       xAxisIndex: 0,
       start,
@@ -1373,16 +1364,6 @@ function xAxisZoom(count: number, visibleCount = 8): echarts.EChartsOption["data
 function xValueZoom(): echarts.EChartsOption["dataZoom"] {
   return [
     {
-      type: "inside",
-      xAxisIndex: 0,
-      start: 0,
-      end: 100,
-      filterMode: "filter",
-      moveOnMouseMove: true,
-      moveOnMouseWheel: true,
-      zoomOnMouseWheel: false
-    },
-    {
       type: "slider",
       xAxisIndex: 0,
       start: 0,
@@ -1408,22 +1389,411 @@ function xValueZoom(): echarts.EChartsOption["dataZoom"] {
   ];
 }
 
-function ChartCanvas({ option, className = "", label }: { option: echarts.EChartsOption; className?: string; label: string }) {
+type ChartInteractionMode = "category" | "scatter";
+
+type InteractiveChartSeries = {
+  name?: string;
+  type?: string;
+  data?: unknown[];
+  xAxisIndex?: number;
+};
+
+type InteractiveChartAxis = {
+  data?: Array<string | number>;
+};
+
+type ChartSelectionItem = {
+  label: string;
+  value: string;
+  color: string;
+};
+
+type ChartSelection = {
+  key: string;
+  heading: string;
+  items: ChartSelectionItem[];
+  seriesIndexes: number[];
+  dataIndex: number;
+  left: number;
+  top: number;
+};
+
+type ChartGesture = {
+  pointerId: number;
+  pointerType: string;
+  startX: number;
+  startY: number;
+  direction: GestureDirection;
+  ignore: boolean;
+};
+
+type ChartZoomState = {
+  start: number;
+  end: number;
+  startValue?: string | number;
+  endValue?: string | number;
+  atEnd: boolean;
+};
+
+function optionArray<T>(value: T | T[] | undefined): T[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function chartDataValue(item: unknown): unknown {
+  if (item && typeof item === "object" && "value" in item) {
+    return (item as { value: unknown }).value;
+  }
+  return item;
+}
+
+function chartMetricValue(name: string, value: unknown): string {
+  const numericValue = Number(value);
+  if (name.includes("配速") || name.includes("移动平均")) return `${formatPace(numericValue)} /km`;
+  if (name.includes("心率")) return `${numericValue.toFixed(0)} bpm`;
+  if (name.includes("体重")) return `${numericValue.toFixed(1)} kg`;
+  if (name.includes("距离") || name.includes("跑量") || name.includes("最长单次")) return `${numericValue.toFixed(2)} km`;
+  return String(value ?? "-");
+}
+
+function chartSeriesColors(option: echarts.EChartsOption): string[] {
+  if (!Array.isArray(option.color)) return [];
+  return option.color.filter((color): color is string => typeof color === "string");
+}
+
+function categorySelection(
+  option: echarts.EChartsOption,
+  dataIndex: number,
+  left: number,
+  top: number
+): ChartSelection | null {
+  const axis = optionArray(option.xAxis as InteractiveChartAxis | InteractiveChartAxis[] | undefined)[0];
+  const heading = axis?.data?.[dataIndex];
+  const series = optionArray(option.series as InteractiveChartSeries | InteractiveChartSeries[] | undefined);
+  const colors = chartSeriesColors(option);
+  const items: ChartSelectionItem[] = [];
+  const seriesIndexes: number[] = [];
+
+  series.forEach((entry, seriesIndex) => {
+    if ((entry.xAxisIndex ?? 0) !== 0 || !entry.name || !entry.data) return;
+    const value = chartDataValue(entry.data[dataIndex]);
+    if (value === null || value === undefined || (typeof value === "number" && !Number.isFinite(value))) return;
+    items.push({
+      label: entry.name,
+      value: chartMetricValue(entry.name, value),
+      color: colors[seriesIndex % Math.max(colors.length, 1)] ?? CHART_COLORS.primary
+    });
+    seriesIndexes.push(seriesIndex);
+  });
+
+  if (heading === undefined || items.length === 0) return null;
+  return {
+    key: `category-${dataIndex}`,
+    heading: String(heading),
+    items,
+    seriesIndexes,
+    dataIndex,
+    left,
+    top
+  };
+}
+
+function scatterSelection(
+  option: echarts.EChartsOption,
+  seriesIndex: number,
+  dataIndex: number,
+  left: number,
+  top: number
+): ChartSelection | null {
+  const series = optionArray(option.series as InteractiveChartSeries | InteractiveChartSeries[] | undefined);
+  const entry = series[seriesIndex];
+  const value = chartDataValue(entry?.data?.[dataIndex]);
+  if (!entry?.name || !Array.isArray(value)) return null;
+  const colors = chartSeriesColors(option);
+  const color = colors[seriesIndex % Math.max(colors.length, 1)] ?? CHART_COLORS.primary;
+  let heading = String(value[3] ?? entry.name);
+  let items: ChartSelectionItem[] = [];
+
+  if (entry.name === "体重-配速" || entry.name === "体重-心率") {
+    heading = String(value[3] ?? entry.name);
+    const pace = entry.name === "体重-配速" ? Number(value[1]) : Number(value[4]);
+    const heartRate = entry.name === "体重-心率" ? Number(value[1]) : Number(value[4]);
+    items = [
+      { label: "体重", value: `${Number(value[0]).toFixed(1)} kg`, color },
+      { label: "配速", value: `${formatPace(pace)} /km`, color: CHART_COLORS.primary },
+      { label: "心率", value: `${heartRate.toFixed(0)} bpm`, color: CHART_COLORS.violet },
+      { label: "距离", value: `${Number(value[2]).toFixed(1)} km`, color: CHART_COLORS.load }
+    ];
+  } else if (entry.name === "配速-心率") {
+    items = [
+      { label: "配速", value: `${formatPace(Number(value[0]))} /km`, color },
+      { label: "心率", value: `${Number(value[1]).toFixed(0)} bpm`, color: CHART_COLORS.trend },
+      { label: "距离", value: `${Number(value[2]).toFixed(1)} km`, color: CHART_COLORS.load }
+    ];
+  }
+
+  if (items.length === 0) return null;
+  const relatedSeriesIndexes = series
+    .map((candidate, candidateIndex) => candidate.type === "scatter" && candidate.data?.[dataIndex] !== undefined ? candidateIndex : -1)
+    .filter((candidateIndex) => candidateIndex >= 0);
+  return {
+    key: `scatter-${seriesIndex}-${dataIndex}`,
+    heading,
+    items,
+    seriesIndexes: relatedSeriesIndexes,
+    dataIndex,
+    left,
+    top
+  };
+}
+
+function interactiveChartOption(option: echarts.EChartsOption, zoomState?: ChartZoomState): echarts.EChartsOption {
+  const dataZoom = optionArray(option.dataZoom).map((zoom) => {
+    if (!zoomState || zoomState.atEnd || typeof zoom !== "object" || zoom === null) return zoom;
+    return {
+      ...zoom,
+      start: zoomState.start,
+      end: zoomState.end,
+      ...(zoomState.startValue !== undefined ? { startValue: zoomState.startValue } : {}),
+      ...(zoomState.endValue !== undefined ? { endValue: zoomState.endValue } : {})
+    };
+  });
+  return {
+    ...option,
+    tooltip: { ...(typeof option.tooltip === "object" && !Array.isArray(option.tooltip) ? option.tooltip : {}), show: false, triggerOn: "none" },
+    dataZoom
+  };
+}
+
+function ChartCanvas({
+  option,
+  className = "",
+  label,
+  interaction,
+  zoomKey = "default"
+}: {
+  option: echarts.EChartsOption;
+  className?: string;
+  label: string;
+  interaction: ChartInteractionMode;
+  zoomKey?: string;
+}) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<echarts.ECharts | null>(null);
+  const optionRef = useRef(option);
+  const interactionRef = useRef(interaction);
+  const zoomKeyRef = useRef(zoomKey);
+  const zoomStatesRef = useRef(new Map<string, ChartZoomState>());
+  const gestureRef = useRef<ChartGesture | null>(null);
+  const pinnedRef = useRef(false);
+  const selectionRef = useRef<ChartSelection | null>(null);
+  const [selection, setSelection] = useState<ChartSelection | null>(null);
+  const selectionId = useId();
+
+  optionRef.current = option;
+  interactionRef.current = interaction;
+  zoomKeyRef.current = zoomKey;
 
   useEffect(() => {
     if (!ref.current) return;
-    const chart = echarts.init(ref.current);
-    chart.setOption(option, true);
-    const resize = () => chart.resize();
-    window.addEventListener("resize", resize);
-    return () => {
-      window.removeEventListener("resize", resize);
-      chart.dispose();
-    };
-  }, [option]);
+    const element = ref.current;
+    const chart = echarts.init(element);
+    chartRef.current = chart;
 
-  return <div className={`chart ${className}`} ref={ref} role="img" aria-label={label} />;
+    const clearSelection = () => {
+      const current = selectionRef.current;
+      if (current) {
+        current.seriesIndexes.forEach((seriesIndex) => chart.dispatchAction({ type: "downplay", seriesIndex, dataIndex: current.dataIndex }));
+      }
+      selectionRef.current = null;
+      pinnedRef.current = false;
+      setSelection(null);
+    };
+
+    const publishSelection = (nextSelection: ChartSelection | null) => {
+      if (!nextSelection) return false;
+      const previous = selectionRef.current;
+      if (previous && previous.key !== nextSelection.key) {
+        previous.seriesIndexes.forEach((seriesIndex) => chart.dispatchAction({ type: "downplay", seriesIndex, dataIndex: previous.dataIndex }));
+      }
+      nextSelection.seriesIndexes.forEach((seriesIndex) => chart.dispatchAction({ type: "highlight", seriesIndex, dataIndex: nextSelection.dataIndex }));
+      selectionRef.current = nextSelection;
+      setSelection(nextSelection);
+      window.dispatchEvent(new CustomEvent("running-platform:chart-selection", { detail: { id: selectionId } }));
+      return true;
+    };
+
+    const localPoint = (event: PointerEvent): [number, number] => {
+      const bounds = element.getBoundingClientRect();
+      return [event.clientX - bounds.left, event.clientY - bounds.top];
+    };
+
+    const selectionAt = (x: number, y: number): ChartSelection | null => {
+      if (!chart.containPixel({ gridIndex: 0 }, [x, y])) return null;
+      const currentOption = optionRef.current;
+      const width = element.clientWidth;
+      const height = element.clientHeight;
+      const popoverLeft = Math.max(8, Math.min(x + 12, width - 292));
+      const popoverTop = Math.max(8, Math.min(y + 12, height - 112));
+
+      if (interactionRef.current === "category") {
+        const axis = optionArray(currentOption.xAxis as InteractiveChartAxis | InteractiveChartAxis[] | undefined)[0];
+        const axisData = axis?.data ?? [];
+        const positions = axisData.map((axisValue) => {
+          const pixel = chart.convertToPixel({ xAxisIndex: 0 }, axisValue);
+          return typeof pixel === "number" ? pixel : Number.NaN;
+        });
+        const dataIndex = nearestPixelIndex(positions, x);
+        return dataIndex < 0 ? null : categorySelection(currentOption, dataIndex, popoverLeft, popoverTop);
+      }
+
+      const series = optionArray(currentOption.series as InteractiveChartSeries | InteractiveChartSeries[] | undefined);
+      let nearest: { seriesIndex: number; dataIndex: number; distance: number } | null = null;
+      series.forEach((entry, seriesIndex) => {
+        if (entry.type !== "scatter" || !entry.data) return;
+        entry.data.forEach((dataItem, dataIndex) => {
+          const value = chartDataValue(dataItem);
+          if (!Array.isArray(value)) return;
+          const pixel = chart.convertToPixel({ seriesIndex }, [Number(value[0]), Number(value[1])]);
+          if (!Array.isArray(pixel) || !Number.isFinite(pixel[0]) || !Number.isFinite(pixel[1])) return;
+          const distance = Math.hypot(pixel[0] - x, pixel[1] - y);
+          if (!nearest || distance < nearest.distance) nearest = { seriesIndex, dataIndex, distance };
+        });
+      });
+      if (!nearest) return null;
+      const resolvedNearest = nearest as { seriesIndex: number; dataIndex: number; distance: number };
+      return scatterSelection(currentOption, resolvedNearest.seriesIndex, resolvedNearest.dataIndex, popoverLeft, popoverTop);
+    };
+
+    const handlePointerDown = (event: PointerEvent) => {
+      gestureRef.current = {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startX: event.clientX,
+        startY: event.clientY,
+        direction: "pending",
+        ignore: event.pointerType === "touch" && event.clientX <= 20
+      };
+    };
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerType === "mouse") {
+        if (pinnedRef.current || event.buttons !== 0) return;
+        const [x, y] = localPoint(event);
+        publishSelection(selectionAt(x, y));
+        return;
+      }
+
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId || gesture.ignore) return;
+      if (gesture.direction === "pending") {
+        gesture.direction = classifyGestureDirection(event.clientX - gesture.startX, event.clientY - gesture.startY);
+      }
+      if (gesture.direction !== "horizontal") return;
+      if (event.cancelable) event.preventDefault();
+      const [x, y] = localPoint(event);
+      publishSelection(selectionAt(x, y));
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      const gesture = gestureRef.current;
+      if (!gesture || gesture.pointerId !== event.pointerId) return;
+      gestureRef.current = null;
+      if (gesture.ignore || gesture.direction === "vertical") return;
+      const [x, y] = localPoint(event);
+      const nextSelection = gesture.direction === "pending" ? selectionAt(x, y) : selectionRef.current;
+      if (nextSelection) {
+        publishSelection(nextSelection);
+        pinnedRef.current = true;
+      } else if (gesture.direction === "pending") {
+        clearSelection();
+      }
+    };
+
+    const handlePointerLeave = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && !pinnedRef.current) clearSelection();
+    };
+
+    const handleSelectionFromAnotherChart = (event: Event) => {
+      const detail = (event as CustomEvent<{ id: string }>).detail;
+      if (detail?.id !== selectionId) clearSelection();
+    };
+
+    const handleZoom = () => {
+      const appliedOption = chart.getOption() as {
+        dataZoom?: Array<{ start?: number; end?: number; startValue?: string | number; endValue?: string | number }>;
+      };
+      const zoom = appliedOption.dataZoom?.[0];
+      if (typeof zoom?.start !== "number" || typeof zoom.end !== "number") return;
+      zoomStatesRef.current.set(zoomKeyRef.current, {
+        start: zoom.start,
+        end: zoom.end,
+        startValue: zoom.startValue,
+        endValue: zoom.endValue,
+        atEnd: zoom.end >= 99.5
+      });
+    };
+
+    const resize = () => chart.resize();
+    element.addEventListener("pointerdown", handlePointerDown);
+    element.addEventListener("pointermove", handlePointerMove, { passive: false });
+    element.addEventListener("pointerup", handlePointerUp);
+    element.addEventListener("pointercancel", handlePointerUp);
+    element.addEventListener("pointerleave", handlePointerLeave);
+    window.addEventListener("running-platform:chart-selection", handleSelectionFromAnotherChart);
+    window.addEventListener("resize", resize);
+    chart.on("datazoom", handleZoom);
+    return () => {
+      element.removeEventListener("pointerdown", handlePointerDown);
+      element.removeEventListener("pointermove", handlePointerMove);
+      element.removeEventListener("pointerup", handlePointerUp);
+      element.removeEventListener("pointercancel", handlePointerUp);
+      element.removeEventListener("pointerleave", handlePointerLeave);
+      window.removeEventListener("running-platform:chart-selection", handleSelectionFromAnotherChart);
+      window.removeEventListener("resize", resize);
+      chart.off("datazoom", handleZoom);
+      chart.dispose();
+      chartRef.current = null;
+    };
+  }, [selectionId]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const currentSelection = selectionRef.current;
+    if (currentSelection) {
+      currentSelection.seriesIndexes.forEach((seriesIndex) => chart.dispatchAction({ type: "downplay", seriesIndex, dataIndex: currentSelection.dataIndex }));
+    }
+    selectionRef.current = null;
+    pinnedRef.current = false;
+    setSelection(null);
+    chart.setOption(interactiveChartOption(option, zoomStatesRef.current.get(zoomKey)), true);
+  }, [option, zoomKey]);
+
+  return (
+    <div className={`chart-interaction-shell ${selection ? "has-selection" : ""}`}>
+      {selection && (
+        <div
+          className="chart-selection-popover"
+          style={{ left: selection.left, top: selection.top }}
+          role="status"
+          aria-live="polite"
+        >
+          <strong>{selection.heading}</strong>
+          <span className="chart-selection-items">
+            {selection.items.map((item) => (
+              <span className="chart-selection-item" key={`${item.label}-${item.value}`}>
+                <i style={{ backgroundColor: item.color }} />
+                <small>{item.label}</small>
+                <b>{item.value}</b>
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
+      <div className={`chart chart-interaction-surface ${className}`} ref={ref} role="img" aria-label={label} />
+    </div>
+  );
 }
 
 function useNarrowViewport() {
@@ -1641,7 +2011,12 @@ function RunTrendChart({ runs }: { runs: RunningRecord[] }) {
           { label: "3次均值", value: `${summary.rollingPace} /km`, tone: "trend" }
         ]}
       />
-      <ChartCanvas option={option} className="run-trend-chart" label="跑步配速、移动平均、单次距离与平均心率趋势图" />
+      <ChartCanvas
+        option={option}
+        className="run-trend-chart"
+        label="跑步配速、移动平均、单次距离与平均心率趋势图"
+        interaction="category"
+      />
     </div>
   );
 }
@@ -1673,13 +2048,17 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
     const weightPaceScatter = sorted
       .map((run) => {
         const weight = nearestWeight(run, weights);
-        return weight ? [weight.weightKg, run.avgPaceSecPerKm, run.distanceKm] : null;
+        return weight
+          ? [weight.weightKg, run.avgPaceSecPerKm, run.distanceKm, runLocalDate(run), run.avgHeartRateBpm]
+          : null;
       })
       .filter(Boolean);
     const weightHeartRateScatter = sorted
       .map((run) => {
         const weight = nearestWeight(run, weights);
-        return weight ? [weight.weightKg, run.avgHeartRateBpm, run.distanceKm] : null;
+        return weight
+          ? [weight.weightKg, run.avgHeartRateBpm, run.distanceKm, runLocalDate(run), run.avgPaceSecPerKm]
+          : null;
       })
       .filter(Boolean);
 
@@ -1772,7 +2151,12 @@ function WeightRelationChart({ runs, weights }: { runs: RunningRecord[]; weights
           { label: "体重-心率", value: formatCorrelation(summary.heartCorrelation), tone: "trend" }
         ]}
       />
-      <ChartCanvas option={option} className="relation-chart" label="体重与跑步配速、平均心率关系散点图" />
+      <ChartCanvas
+        option={option}
+        className="relation-chart"
+        label="体重与跑步配速、平均心率关系散点图"
+        interaction="scatter"
+      />
     </div>
   );
 }
@@ -1870,7 +2254,12 @@ function PaceHeartChart({ runs }: { runs: RunningRecord[] }) {
           { label: "Pearson 相关", value: formatCorrelation(summary.correlation), tone: "primary" }
         ]}
       />
-      <ChartCanvas option={option} className="scatter-chart" label="平均配速与平均心率关系散点图和线性趋势" />
+      <ChartCanvas
+        option={option}
+        className="scatter-chart"
+        label="平均配速与平均心率关系散点图和线性趋势"
+        interaction="scatter"
+      />
     </div>
   );
 }
@@ -1982,6 +2371,8 @@ function VolumeChart({ runs }: { runs: RunningRecord[] }) {
         option={option}
         className="volume-chart"
         label={`${volumeMode === "weekly" ? "周" : "月"}跑量与周期内最长单次距离趋势图`}
+        interaction="category"
+        zoomKey={volumeMode}
       />
     </div>
   );
@@ -2062,7 +2453,12 @@ function WeightTrendChart({ weights }: { weights: WeightRecord[] }) {
           }
         ]}
       />
-      <ChartCanvas option={option} className="weight-trend-chart" label="按日期排列的体重原始记录趋势图" />
+      <ChartCanvas
+        option={option}
+        className="weight-trend-chart"
+        label="按日期排列的体重原始记录趋势图"
+        interaction="category"
+      />
     </div>
   );
 }
