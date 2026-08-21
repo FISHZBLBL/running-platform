@@ -1772,6 +1772,7 @@ function ChartCanvas({
 
   return (
     <div className={`chart-interaction-shell ${selection ? "has-selection" : ""}`}>
+      <div className={`chart chart-interaction-surface ${className}`} ref={ref} role="img" aria-label={label} />
       {selection && (
         <div
           className="chart-selection-popover"
@@ -1791,7 +1792,6 @@ function ChartCanvas({
           </span>
         </div>
       )}
-      <div className={`chart chart-interaction-surface ${className}`} ref={ref} role="img" aria-label={label} />
     </div>
   );
 }
@@ -2721,11 +2721,13 @@ function nullableDraftNumber(value: string): number | null {
 function RunnerProfileMenu({
   username,
   profile,
-  onSaved
+  onSaved,
+  onLogout
 }: {
   username: string;
   profile: RunnerProfile | null;
   onSaved: (profile: RunnerProfile) => void;
+  onLogout: () => void;
 }) {
   const [draft, setDraft] = useState<RunnerProfileDraft>(() => runnerProfileDraft(profile));
   const [open, setOpen] = useState(false);
@@ -2803,6 +2805,7 @@ function RunnerProfileMenu({
           <div className="profile-popover-heading">
             <p className="eyebrow">Runner Profile</p>
             <h2>个人资料</h2>
+            <span className="profile-account-name">{username}</span>
           </div>
           <form className="profile-popover-form" onSubmit={submit}>
           <label>
@@ -2824,6 +2827,7 @@ function RunnerProfileMenu({
             <input type="text" inputMode="decimal" value={draft.heightCm} onChange={(event) => setField("heightCm", event.target.value)} />
           </label>
           <button className="primary-button" disabled={busy}>{busy ? "保存中..." : "保存个人资料"}</button>
+          <button type="button" className="ghost-button profile-logout-action" onClick={onLogout}>退出账户</button>
           {message && <p className="form-message profile-message">{message}</p>}
         </form>
         </div>
@@ -3078,11 +3082,18 @@ function RunForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [recognizedText, setRecognizedText] = useState("");
+  const isNarrow = useNarrowViewport();
+  const [mobileSections, setMobileSections] = useState({ performance: false, environment: false, notes: false });
 
   useEffect(() => {
     setDraft(editingRun ? draftFromRun(editingRun) : newRunDraft());
     setFiles([]);
     setRecognizedText("");
+    setMobileSections({
+      performance: Boolean(editingRun),
+      environment: Boolean(editingRun),
+      notes: Boolean(editingRun)
+    });
   }, [editingRun]);
 
   useEffect(() => {
@@ -3093,6 +3104,10 @@ function RunForm({
 
   function setField<K extends keyof RunDraft>(key: K, value: RunDraft[K]) {
     setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleMobileSection(section: keyof typeof mobileSections) {
+    setMobileSections((current) => ({ ...current, [section]: !current[section] }));
   }
 
   function setSplit(index: number, key: keyof SplitDraft, value: string) {
@@ -3310,7 +3325,16 @@ function RunForm({
             />
           </label>
         </div>
-        <div className="form-section wide">
+        <button
+          type="button"
+          className="mobile-form-section-toggle wide"
+          aria-expanded={!isNarrow || mobileSections.performance}
+          onClick={() => toggleMobileSection("performance")}
+        >
+          <span><strong>跑步表现</strong><small>配速、心率、步频、功率等</small></span>
+          <i aria-hidden="true" />
+        </button>
+        {(!isNarrow || mobileSections.performance) && <div className="form-section wide">
           <p>跑步表现</p>
           <div className="performance-grid">
             <label>
@@ -3365,8 +3389,17 @@ function RunForm({
               />
             </label>
           </div>
-        </div>
-        <div className="form-section weather-section wide">
+        </div>}
+        <button
+          type="button"
+          className="mobile-form-section-toggle wide"
+          aria-expanded={!isNarrow || mobileSections.environment}
+          onClick={() => toggleMobileSection("environment")}
+        >
+          <span><strong>环境</strong><small>气温、湿度与空气质量</small></span>
+          <i aria-hidden="true" />
+        </button>
+        {(!isNarrow || mobileSections.environment) && <div className="form-section weather-section wide">
           <p>环境</p>
           <div className="weather-grid">
             <label>
@@ -3382,16 +3415,28 @@ function RunForm({
               <input value={draft.aqi} onChange={(event) => setField("aqi", event.target.value)} inputMode="numeric" />
             </label>
           </div>
-        </div>
-        <label className="wide">
-          主观感受 / 备注
-          <textarea
-            value={draft.notes}
-            maxLength={2000}
-            onChange={(event) => setField("notes", event.target.value)}
-            placeholder="例如：感觉轻松、后半程心率偏高、睡眠不足、天气闷热、腿部疲劳等"
-          />
-        </label>
+        </div>}
+        <button
+          type="button"
+          className="mobile-form-section-toggle wide"
+          aria-expanded={!isNarrow || mobileSections.notes}
+          onClick={() => toggleMobileSection("notes")}
+        >
+          <span><strong>主观感受</strong><small>备注本次训练状态</small></span>
+          <i aria-hidden="true" />
+        </button>
+        {(!isNarrow || mobileSections.notes) && <div className="form-section notes-section wide">
+          <p>主观感受</p>
+          <label>
+            备注
+            <textarea
+              value={draft.notes}
+              maxLength={2000}
+              onChange={(event) => setField("notes", event.target.value)}
+              placeholder="例如：感觉轻松、后半程心率偏高、睡眠不足、天气闷热、腿部疲劳等"
+            />
+          </label>
+        </div>}
         <label className="wide">
           Apple Watch 截图
           <input type="file" accept="image/*" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
@@ -3457,9 +3502,11 @@ function RunForm({
           </div>
         )}
         {message && <p className="form-message wide">{message}</p>}
-        <button className="primary-button wide" disabled={busy}>
-          {busy ? "保存中..." : editingRun ? "确认更新记录" : "保存跑步记录"}
-        </button>
+        <div className="run-save-bar wide">
+          <button className="primary-button" disabled={busy}>
+            {busy ? "保存中..." : editingRun ? "确认更新记录" : "保存跑步记录"}
+          </button>
+        </div>
       </form>
     </section>
   );
@@ -3738,6 +3785,44 @@ function WeightForm({
   );
 }
 
+function RecordOverview({
+  runs,
+  weights,
+  shoes,
+  loading
+}: {
+  runs: RunningRecord[];
+  weights: WeightRecord[];
+  shoes: RunningShoe[];
+  loading: boolean;
+}) {
+  const latestRun = runs[0] ?? null;
+  return (
+    <section className="panel record-overview-panel" aria-label="记录概览">
+      <div className="panel-heading">
+        <div>
+          <p className="eyebrow">Record Overview</p>
+          <h2>记录概览</h2>
+        </div>
+        {loading && <span className="loading-dot">同步中</span>}
+      </div>
+      <div className="record-overview-grid">
+        <div><span>跑步</span><strong>{runs.length} 次</strong></div>
+        <div><span>体重</span><strong>{weights.length} 条</strong></div>
+        <div><span>跑鞋</span><strong>{shoes.length} 双</strong></div>
+      </div>
+      <div className="record-latest-run">
+        <span>最近一次跑步</span>
+        {latestRun ? (
+          <strong>{runLocalDate(latestRun)} · {latestRun.distanceKm.toFixed(2)} km · {formatPace(latestRun.avgPaceSecPerKm)} /km</strong>
+        ) : (
+          <strong>暂无记录</strong>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function HistoryManager({
   runs,
   shoes,
@@ -3924,6 +4009,11 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [editingWeight, setEditingWeight] = useState<WeightRecord | null>(null);
   const [activeView, setActiveView] = useState<AppView>("home");
 
+  function switchView(view: AppView) {
+    setActiveView(view);
+    requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+  }
+
   function scrollToForms() {
     setActiveView("records");
     requestAnimationFrame(() => {
@@ -4060,7 +4150,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <button
               type="button"
               className={activeView === "home" ? "active" : ""}
-              onClick={() => setActiveView("home")}
+              onClick={() => switchView("home")}
               aria-current={activeView === "home" ? "page" : undefined}
             >
               主页
@@ -4068,7 +4158,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <button
               type="button"
               className={activeView === "records" ? "active" : ""}
-              onClick={() => setActiveView("records")}
+              onClick={() => switchView("records")}
               aria-current={activeView === "records" ? "page" : undefined}
             >
               记录
@@ -4076,7 +4166,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <button
               type="button"
               className={activeView === "vdot" ? "active" : ""}
-              onClick={() => setActiveView("vdot")}
+              onClick={() => switchView("vdot")}
               aria-current={activeView === "vdot" ? "page" : undefined}
             >
               跑力值
@@ -4084,7 +4174,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <button
               type="button"
               className={activeView === "prediction" ? "active" : ""}
-              onClick={() => setActiveView("prediction")}
+              onClick={() => switchView("prediction")}
               aria-current={activeView === "prediction" ? "page" : undefined}
             >
               预测建议
@@ -4092,7 +4182,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <button
               type="button"
               className={activeView === "shoes" ? "active" : ""}
-              onClick={() => setActiveView("shoes")}
+              onClick={() => switchView("shoes")}
               aria-current={activeView === "shoes" ? "page" : undefined}
             >
               鞋库
@@ -4100,8 +4190,8 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
           </nav>
         </div>
         <div className="user-actions">
-          <RunnerProfileMenu username={user.username} profile={runnerProfile} onSaved={setRunnerProfile} />
-          <button className="ghost-button" onClick={onLogout}>退出</button>
+          <RunnerProfileMenu username={user.username} profile={runnerProfile} onSaved={setRunnerProfile} onLogout={onLogout} />
+          <button className="ghost-button desktop-logout-button" onClick={onLogout}>退出</button>
         </div>
       </header>
 
@@ -4200,7 +4290,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <RunForm shoes={shoes} editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={upsertRun} />
             <div className="side-column">
               <WeightForm editingWeight={editingWeight} onCancelEdit={() => setEditingWeight(null)} onSaved={upsertWeight} />
-              {loading && <span className="loading-dot">同步中</span>}
+              <RecordOverview runs={runs} weights={weights} shoes={shoes} loading={loading} />
             </div>
           </section>
           <HistoryManager
