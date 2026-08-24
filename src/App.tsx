@@ -7,6 +7,7 @@ import {
   extractSplitsFromText as extractSplitsFromOcrText,
   getRunOcrWarnings,
   type SplitDraft,
+  type SplitMetricField,
   type SplitOcrResult
 } from "./ocr";
 import { buildHeartRateBaseline, type HeartRateBaseline } from "@shared/physiology";
@@ -668,7 +669,9 @@ function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrR
     detectedCount: detectedIndexes.length,
     fullSplitCount,
     droppedIndexes,
-    incompleteIndexes: []
+    incompleteIndexes: [],
+    missingIndexes: [],
+    ambiguousFields: []
   };
 }
 
@@ -745,7 +748,39 @@ async function createEffortScoreCanvas(file: File): Promise<HTMLCanvasElement> {
   return canvas;
 }
 
-async function detectTextFromImages(files: File[], includeEffortRegion = false): Promise<string> {
+async function createSplitOcrCanvas(file: File): Promise<HTMLCanvasElement> {
+  const bitmap = await createImageBitmap(file);
+  const isPortraitScreenshot = bitmap.height > bitmap.width * 1.3;
+  const sourceHeight = isPortraitScreenshot ? Math.floor(bitmap.height * 0.68) : bitmap.height;
+  const scale = 1.5;
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(sourceHeight * scale);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    bitmap.close();
+    throw new Error("无法创建单段增强识别画布");
+  }
+  context.imageSmoothingEnabled = false;
+  context.drawImage(bitmap, 0, 0, bitmap.width, sourceHeight, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+
+  const image = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < image.data.length; index += 4) {
+    // Apple Watch 深色页面上的白色和彩色数字都具有较高的单通道亮度。
+    // 二值化后再识别一次，可减少 3 的开口被噪点封闭成 8 的情况。
+    const maxChannel = Math.max(image.data[index], image.data[index + 1], image.data[index + 2]);
+    const value = maxChannel >= 120 ? 0 : 255;
+    image.data[index] = value;
+    image.data[index + 1] = value;
+    image.data[index + 2] = value;
+    image.data[index + 3] = 255;
+  }
+  context.putImageData(image, 0, 0);
+  return canvas;
+}
+
+async function detectTextFromImages(files: File[], includeEffortRegion = false, includeSplitEnhancement = false): Promise<string> {
   const texts: string[] = [];
   const priorityTexts: string[] = [];
 
@@ -756,6 +791,12 @@ async function detectTextFromImages(files: File[], includeEffortRegion = false):
       const results = await detector.detect(bitmap);
       const fullText = results.map((result) => result.rawValue ?? "").filter(Boolean).join("\n");
       if (fullText) texts.push(fullText);
+      if (includeSplitEnhancement) {
+        const enhancedCanvas = await createSplitOcrCanvas(file);
+        const enhancedResults = await detector.detect(enhancedCanvas);
+        const enhancedText = enhancedResults.map((result) => result.rawValue ?? "").filter(Boolean).join("\n");
+        if (enhancedText) texts.push(enhancedText);
+      }
       if (includeEffortRegion && /耗能|体能训练详细信息/.test(fullText)) {
         const rectangle = effortCropRectangle(bitmap.width, bitmap.height);
         const effortBitmap = await createImageBitmap(
@@ -787,6 +828,13 @@ async function detectTextFromImages(files: File[], includeEffortRegion = false):
       const result = await worker.recognize(file);
       if (result.data.text.trim()) {
         texts.push(result.data.text.trim());
+      }
+      if (includeSplitEnhancement) {
+        const enhancedCanvas = await createSplitOcrCanvas(file);
+        const enhancedResult = await worker.recognize(enhancedCanvas);
+        if (enhancedResult.data.text.trim()) {
+          texts.push(enhancedResult.data.text.trim());
+        }
       }
       if (includeEffortRegion && /耗能|体能训练详细信息/.test(result.data.text)) {
         const effortCanvas = await createEffortScoreCanvas(file);
@@ -3082,6 +3130,7 @@ function RunForm({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [recognizedText, setRecognizedText] = useState("");
+  const [splitReviewFields, setSplitReviewFields] = useState<string[]>([]);
   const isNarrow = useNarrowViewport();
   const [mobileSections, setMobileSections] = useState({ performance: false, environment: false, notes: false });
 
@@ -3089,6 +3138,7 @@ function RunForm({
     setDraft(editingRun ? draftFromRun(editingRun) : newRunDraft());
     setFiles([]);
     setRecognizedText("");
+    setSplitReviewFields([]);
     setMobileSections({
       performance: Boolean(editingRun),
       environment: Boolean(editingRun),
@@ -3115,6 +3165,11 @@ function RunForm({
       ...current,
       splits: current.splits.map((split, splitIndex) => (splitIndex === index ? { ...split, [key]: value } : split))
     }));
+    setSplitReviewFields((current) => current.filter((item) => item !== `${index + 1}:${key}`));
+  }
+
+  function splitNeedsReview(index: number, field: SplitMetricField): boolean {
+    return splitReviewFields.includes(`${index + 1}:${field}`);
   }
 
   function addCompleteSplit() {
@@ -3245,9 +3300,10 @@ function RunForm({
       setMessage("请先填写本次跑步总距离，再识别单段数据。");
       return;
     }
+    setSplitReviewFields([]);
     setMessage(window.TextDetector ? "正在识别单段截图，请稍等。" : "正在使用兼容 OCR 识别单段，首次加载可能需要几十秒。");
     try {
-      const text = await detectTextFromImages(files);
+      const text = await detectTextFromImages(files, false, true);
       const result = extractSplitsFromOcrText(text, totalDistanceKm);
       setRecognizedText(text || "未识别到文本。");
       if (result.splits.length === 0) {
@@ -3255,13 +3311,25 @@ function RunForm({
         return;
       }
       setDraft((current) => ({ ...current, splits: result.splits }));
+      setSplitReviewFields(result.ambiguousFields.map(({ index, field }) => `${index}:${field}`));
       const droppedText =
         result.droppedIndexes.length > 0 ? `已忽略超出总距离的第 ${result.droppedIndexes.join("、")} 段。` : "";
+      const missingText =
+        result.missingIndexes.length > 0 ? `未找到第 ${result.missingIndexes.join("、")} 段，已保留空行等待补录。` : "";
       const incompleteText =
         result.incompleteIndexes.length > 0 ? `第 ${result.incompleteIndexes.join("、")} 段有字段未可靠识别，请重点校对。` : "各保留分段字段完整。";
+      const fieldLabels: Record<SplitMetricField, string> = {
+        pace: "配速",
+        heartRateBpm: "心率",
+        powerW: "功率",
+        cadenceSpm: "步频"
+      };
+      const ambiguityText = result.ambiguousFields.length > 0
+        ? `存在候选冲突：${result.ambiguousFields.map(({ index, field, candidates }) => `第${index}段${fieldLabels[field]} ${candidates.join(" / ")}`).join("；")}，黄色字段请人工确认。`
+        : "";
       const completeSplitCount = result.splits.filter((split) => split.kind !== "tail").length;
       const tailText = result.tailDuration ? `已追加尾段 ${result.tailDuration}，仅保留时间。` : "未发现可确认的短尾段。";
-      setMessage(`已识别 ${result.detectedCount} 段，保留 ${completeSplitCount} 段完整公里。${tailText}${droppedText}${incompleteText}`);
+      setMessage(`已识别 ${result.detectedCount} 段，保留 ${completeSplitCount} 段完整公里。${tailText}${droppedText}${missingText}${incompleteText}${ambiguityText}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "单段截图识别失败，请手动校对录入。");
     }
@@ -3485,15 +3553,16 @@ function RunForm({
                 <strong>{index + 1}</strong>
                 <input value={split.distanceKm} onChange={(event) => setSplit(index, "distanceKm", event.target.value)} inputMode="decimal" placeholder="km" />
                 <input
+                  className={splitNeedsReview(index, "pace") ? "ocr-review-field" : undefined}
                   value={split.pace}
                   onChange={(event) => setSplit(index, "pace", event.target.value)}
                   onBlur={(event) => setSplit(index, "pace", normalizeClockInput(event.target.value))}
                   inputMode="numeric"
                   placeholder="配速"
                 />
-                <input value={split.heartRateBpm} onChange={(event) => setSplit(index, "heartRateBpm", event.target.value)} inputMode="numeric" placeholder="心率" />
-                <input value={split.powerW} onChange={(event) => setSplit(index, "powerW", event.target.value)} inputMode="numeric" placeholder="功率" />
-                <input value={split.cadenceSpm} onChange={(event) => setSplit(index, "cadenceSpm", event.target.value)} inputMode="numeric" placeholder="步频" />
+                <input className={splitNeedsReview(index, "heartRateBpm") ? "ocr-review-field" : undefined} value={split.heartRateBpm} onChange={(event) => setSplit(index, "heartRateBpm", event.target.value)} inputMode="numeric" placeholder="心率" />
+                <input className={splitNeedsReview(index, "powerW") ? "ocr-review-field" : undefined} value={split.powerW} onChange={(event) => setSplit(index, "powerW", event.target.value)} inputMode="numeric" placeholder="功率" />
+                <input className={splitNeedsReview(index, "cadenceSpm") ? "ocr-review-field" : undefined} value={split.cadenceSpm} onChange={(event) => setSplit(index, "cadenceSpm", event.target.value)} inputMode="numeric" placeholder="步频" />
                 <button type="button" className="ghost-button small-button danger-button split-delete-button" onClick={() => removeSplit(index)}>
                   删除
                 </button>

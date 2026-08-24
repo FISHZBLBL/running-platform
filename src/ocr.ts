@@ -8,12 +8,22 @@ export type SplitDraft = {
   cadenceSpm: string;
 };
 
+export type SplitMetricField = "pace" | "heartRateBpm" | "powerW" | "cadenceSpm";
+
+export type SplitOcrAmbiguity = {
+  index: number;
+  field: SplitMetricField;
+  candidates: string[];
+};
+
 export type SplitOcrResult = {
   splits: SplitDraft[];
   detectedCount: number;
   fullSplitCount: number;
   droppedIndexes: number[];
   incompleteIndexes: number[];
+  missingIndexes: number[];
+  ambiguousFields: SplitOcrAmbiguity[];
   tailIndex?: number;
   tailDuration?: string;
 };
@@ -252,11 +262,83 @@ function powerAfterHeartRate(chunk: string): string | null {
   return numberInLine(powerSection, 50, 600);
 }
 
-function extractSplitRows(text: string): Map<number, SplitDraft> {
-  const normalized = normalizeSplitText(text);
-  const rowPattern = /(?:^|\n)\s*(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*次))/g;
-  const rows = [...normalized.matchAll(rowPattern)].map((match) => ({ index: Number(match[1]), start: match.index ?? 0 }));
+function cadenceFromSplitChunk(chunk: string): string | null {
+  const match = chunk.match(/(\d{2,3})\s*(?:步\s*[\/／]\s*(?:分|分钟|分鐘)|步\s*(?:分|分钟|分鐘)|spm|SPM|%\s*[\/／]\s*[%9])/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return value >= 120 && value <= 230 ? String(value) : null;
+}
+
+type SplitCandidate = {
+  count: number;
+  firstSeen: number;
+};
+
+type SplitCandidateMap = Map<number, Map<SplitMetricField, Map<string, SplitCandidate>>>;
+
+type SplitRowExtraction = {
+  splits: Map<number, SplitDraft>;
+  ambiguousFields: SplitOcrAmbiguity[];
+};
+
+// Apple Watch 的横向翻页箭头可能压在第 4、5 行左侧。OCR 常把它输出为 >、›、〉等前缀，
+// 因此这里只容忍明确的箭头字符，不放宽为任意噪声，避免把状态栏数字误当成段号。
+const splitRowPattern = /(?:^|\n)\s*(?:[>›❯»〉❭❱|｜]\s*){0,3}(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*次))/g;
+
+function splitRowStarts(normalized: string): Array<{ index: number; start: number }> {
+  return [...normalized.matchAll(new RegExp(splitRowPattern.source, splitRowPattern.flags))].map((match) => ({
+    index: Number(match[1]),
+    start: match.index ?? 0
+  }));
+}
+
+function addSplitCandidate(
+  candidates: SplitCandidateMap,
+  index: number,
+  field: SplitMetricField,
+  value: string | null | undefined,
+  order: number
+) {
+  if (!value) return;
+  const fields = candidates.get(index) ?? new Map<SplitMetricField, Map<string, SplitCandidate>>();
+  const values = fields.get(field) ?? new Map<string, SplitCandidate>();
+  const current = values.get(value);
+  values.set(value, current ? { ...current, count: current.count + 1 } : { count: 1, firstSeen: order });
+  fields.set(field, values);
+  candidates.set(index, fields);
+}
+
+function resolveSplitCandidates(candidates: SplitCandidateMap): SplitRowExtraction {
   const splits = new Map<number, SplitDraft>();
+  const ambiguousFields: SplitOcrAmbiguity[] = [];
+
+  for (const [index, fields] of candidates) {
+    const split = { ...emptySplit };
+    for (const [field, values] of fields) {
+      const ranked = [...values.entries()].sort((left, right) => {
+        const countDifference = right[1].count - left[1].count;
+        return countDifference || left[1].firstSeen - right[1].firstSeen;
+      });
+      split[field] = ranked[0][0];
+      if (ranked.length > 1) {
+        ambiguousFields.push({
+          index,
+          field,
+          candidates: ranked.map(([value]) => value)
+        });
+      }
+    }
+    splits.set(index, split);
+  }
+
+  return { splits, ambiguousFields };
+}
+
+function extractSplitRows(text: string): SplitRowExtraction {
+  const normalized = normalizeSplitText(text);
+  const rows = splitRowStarts(normalized);
+  const candidates: SplitCandidateMap = new Map();
+  let candidateOrder = 0;
 
   rows.forEach((row, rowPosition) => {
     const next = rows[rowPosition + 1]?.start ?? normalized.length;
@@ -265,22 +347,14 @@ function extractSplitRows(text: string): Map<number, SplitDraft> {
     const paceValue = extractPaceValue(chunk, chunk);
     const heartRate = metricInRange(chunk.match(/\d{2,3}\s*次\s*\/?\s*分/)?.[0] ?? "", 60, 220);
     const power = powerAfterHeartRate(chunk);
-    const cadence = extractCadenceValue(chunk, chunk);
-    const patch: Partial<SplitDraft> = { distanceKm: "1" };
-
-    if (paceValue) {
-      patch.pace = paceValue;
-    } else if (timeMatch) {
-      patch.pace = timeMatch[1];
-    }
-    if (heartRate) patch.heartRateBpm = heartRate;
-    if (power) patch.powerW = power;
-    if (cadence) patch.cadenceSpm = cadence;
-
-    upsertSplit(splits, row.index, patch);
+    const cadence = cadenceFromSplitChunk(chunk);
+    addSplitCandidate(candidates, row.index, "pace", paceValue ?? timeMatch?.[1], candidateOrder++);
+    addSplitCandidate(candidates, row.index, "heartRateBpm", heartRate, candidateOrder++);
+    addSplitCandidate(candidates, row.index, "powerW", power, candidateOrder++);
+    addSplitCandidate(candidates, row.index, "cadenceSpm", cadence, candidateOrder++);
   });
 
-  return splits;
+  return resolveSplitCandidates(candidates);
 }
 
 function mergeSplitLists(primary: SplitDraft[], secondary: SplitDraft[]): Map<number, SplitDraft> {
@@ -329,8 +403,7 @@ function extractTailSplit(
 ): { index: number; split: SplitDraft } | null {
   if (fullSplitCount < 1) return null;
   const normalized = normalizeSplitText(text);
-  const rowPattern = /(?:^|\n)\s*(\d{1,2})(?=\s+(?:\d{1,2}:\d{2}|\d{2,3}\s*次))/g;
-  const rows = [...normalized.matchAll(rowPattern)].map((match) => ({ index: Number(match[1]), start: match.index ?? 0 }));
+  const rows = splitRowStarts(normalized);
   const expectedIndex = fullSplitCount + 1;
   const candidatePositions = rows
     .map((row, index) => ({ row, index }))
@@ -370,24 +443,43 @@ function extractTailSplit(
 
 export function extractSplitsFromText(text: string, totalDistanceKm: number): SplitOcrResult {
   const fullSplitCount = Math.max(0, Math.floor(totalDistanceKm));
-  const rowMap = extractSplitRows(text);
+  const rowExtraction = extractSplitRows(text);
+  const rowMap = rowExtraction.splits;
   const lines = splitOcrLines(text);
-  const splitMap =
-    rowMap.size > 0
-      ? rowMap
-      : mergeSplitLists(parseTimePaceHeartSplits(lines), parseEffortSplits(lines));
+  const fallbackMap = mergeSplitLists(parseTimePaceHeartSplits(lines), parseEffortSplits(lines));
+  const splitMap = new Map<number, SplitDraft>(rowMap);
+  for (const [index, fallback] of fallbackMap) {
+    const current = splitMap.get(index);
+    if (!current) {
+      splitMap.set(index, fallback);
+      continue;
+    }
+    upsertSplit(splitMap, index, {
+      distanceKm: current.distanceKm || fallback.distanceKm,
+      pace: current.pace || fallback.pace,
+      heartRateBpm: current.heartRateBpm || fallback.heartRateBpm,
+      powerW: current.powerW || fallback.powerW,
+      cadenceSpm: current.cadenceSpm || fallback.cadenceSpm
+    });
+  }
   const detectedIndexes = [...splitMap.keys()].sort((a, b) => a - b);
   const tail = extractTailSplit(text, fullSplitCount, totalDistanceKm);
   const droppedIndexes = detectedIndexes.filter(
     (index) => fullSplitCount > 0 && index > fullSplitCount && index !== tail?.index
   );
-  const retainedEntries = detectedIndexes
-    .filter((index) => fullSplitCount === 0 || index <= fullSplitCount)
-    .map((index) => [index, splitMap.get(index)!] as const)
-    .filter(([, split]) => split.pace || split.heartRateBpm || split.powerW || split.cadenceSpm);
+  const expectedIndexes = fullSplitCount > 0
+    ? Array.from({ length: fullSplitCount }, (_, index) => index + 1)
+    : detectedIndexes;
+  const retainedEntries = expectedIndexes
+    .map((index) => [index, splitMap.get(index) ?? { ...emptySplit }] as const)
+    .filter(([, split]) => fullSplitCount > 0 || split.pace || split.heartRateBpm || split.powerW || split.cadenceSpm);
+  const missingIndexes = retainedEntries
+    .filter(([index, split]) => !splitMap.has(index) || (!split.pace && !split.heartRateBpm && !split.powerW && !split.cadenceSpm))
+    .map(([index]) => index);
   const incompleteIndexes = retainedEntries
     .filter(([, split]) => !split.pace || !split.heartRateBpm || !split.powerW || !split.cadenceSpm)
     .map(([index]) => index);
+  const ambiguousFields = rowExtraction.ambiguousFields.filter(({ index }) => fullSplitCount === 0 || index <= fullSplitCount);
 
   return {
     splits: [...retainedEntries.map(([, split]) => split), ...(tail ? [tail.split] : [])],
@@ -395,6 +487,8 @@ export function extractSplitsFromText(text: string, totalDistanceKm: number): Sp
     fullSplitCount,
     droppedIndexes,
     incompleteIndexes,
+    missingIndexes,
+    ambiguousFields,
     tailIndex: tail?.index,
     tailDuration: tail?.split.duration
   };

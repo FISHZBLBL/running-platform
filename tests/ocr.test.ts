@@ -118,6 +118,94 @@ describe("Apple Watch overview OCR parsing", () => {
 });
 
 describe("Apple Watch split screenshot merging", () => {
+  it("keeps the fifth full split when an Apple Watch side-arrow is OCRed before its row number", () => {
+    const text = `
+      单段 1.00公里
+      时间 配速 心率 功率
+      1 06:32 6'32"/公里 153次/分 230瓦
+      2 06:32 6'32"/公里 172次/分 229瓦
+      3 06:33 6'33"/公里 178次/分 228瓦
+      〉 4 06:33 6'33"/公里 183次/分 226瓦
+      > 5 06:54 6'54"/公里 184次/分 217瓦
+      6 00:14 7'13"/公里 185次/分 216瓦
+      单段 1.00公里
+      心率 功率 步频
+      1 153次/分 230瓦 171步/分
+      2 172次/分 229瓦 168步/分
+      3 178次/分 228瓦 167步/分
+      ❯ 4 183次/分 226瓦 167步/分
+      › 5 184次/分 217瓦 168步/分
+      6 185次/分 216瓦 164步/分
+    `;
+
+    const result = extractSplitsFromText(text, 5);
+
+    expect(result.splits.slice(0, 5).map((split) => split.pace)).toEqual(["6:32", "6:32", "6:33", "6:33", "6:54"]);
+    expect(result.splits[4]).toMatchObject({
+      heartRateBpm: "184",
+      powerW: "217",
+      cadenceSpm: "168"
+    });
+    expect(result.tailDuration).toBe("00:14");
+    expect(result.incompleteIndexes).toEqual([]);
+  });
+
+  it("reports metric digit conflicts such as 183 being OCRed as 188 instead of silently accepting one value", () => {
+    const text = `
+      单段 1.00公里
+      时间 配速 心率 功率
+      1 06:32 6'32"/公里 153次/分 230瓦
+      2 06:32 6'32"/公里 172次/分 229瓦
+      3 06:33 6'33"/公里 178次/分 228瓦
+      4 06:33 6'33"/公里 183次/分 223瓦
+      5 06:54 6'54"/公里 184次/分 217瓦
+      6 00:14 7'13"/公里 185次/分 216瓦
+      单段 1.00公里
+      心率 功率 步频
+      1 153次/分 230瓦 171步/分
+      2 172次/分 229瓦 168步/分
+      3 178次/分 228瓦 167步/分
+      4 188次/分 228瓦 168步/分
+      5 184次/分 217瓦 168步/分
+      6 185次/分 216瓦 164步/分
+      单段 1.00公里
+      心率 功率 步频
+      1 153次/分 230瓦 171步/分
+      2 172次/分 229瓦 168步/分
+      3 178次/分 228瓦 167步/分
+      4 183次/分 223瓦 163步/分
+      5 184次/分 217瓦 168步/分
+      6 185次/分 216瓦 164步/分
+      单段 1.00公里
+      心率 功率 步频
+      1 153次/分 230瓦 171步/分
+      2 172次/分 229瓦 168步/分
+      3 178次/分 228瓦 167步/分
+      4 183次/分 223瓦 163步/分
+      5 184次/分 217瓦 168步/分
+      6 185次/分 216瓦 164步/分
+    `;
+
+    const result = extractSplitsFromText(text, 5);
+
+    expect(result.ambiguousFields).toContainEqual({
+      index: 4,
+      field: "heartRateBpm",
+      candidates: ["183", "188"]
+    });
+    expect(result.ambiguousFields).toContainEqual({
+      index: 4,
+      field: "powerW",
+      candidates: ["223", "228"]
+    });
+    expect(result.ambiguousFields).toContainEqual({
+      index: 4,
+      field: "cadenceSpm",
+      candidates: ["163", "168"]
+    });
+    expect(result.splits[3]).toMatchObject({ heartRateBpm: "183", powerW: "223", cadenceSpm: "163" });
+  });
+
   it("merges the two six-row views and appends the short sixth row as a time-only tail", () => {
     const text = `
       单段 1.00公里

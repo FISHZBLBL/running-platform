@@ -951,6 +951,12 @@ input[type="datetime-local"] {
   text-align: center;
 }
 
+.split-row input.ocr-review-field {
+  background: #fff7d6;
+  border-color: #d69e2e;
+  box-shadow: 0 0 0 2px rgb(214 158 46 / 18%);
+}
+
 .tail-split-row {
   grid-template-columns: 56px minmax(120px, 220px) minmax(260px, 1fr) minmax(64px, auto);
   min-width: 560px;
