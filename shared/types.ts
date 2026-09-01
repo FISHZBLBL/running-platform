@@ -67,7 +67,107 @@ export type PublicUser = {
   username: string;
 };
 
+export type DeepseekKeyStatus = {
+  configured: boolean;
+  maskedKey: string | null;
+  updatedAt: string | null;
+  customPrompt: string;
+};
+
+export type AiEvidenceItem = {
+  metric: string;
+  value: string;
+  impact: string;
+};
+
+export type AiInsightItem = {
+  title: string;
+  detail: string;
+  severity?: "info" | "warning" | "critical";
+  evidence?: string;
+};
+
+export type AiTrainingWeek = {
+  label: string;
+  startDate: string;
+  endDate: string;
+  weeklyDistanceKm: { min: number; max: number };
+  sessionsPerWeek: number;
+  longRunKm: { min: number; max: number };
+  keySession: string;
+  easyRunFocus: string;
+  recovery: string;
+  adjustmentReason: string;
+};
+
+export type AiPredictionAnalysis = {
+  kind: "standard";
+  model: "deepseek-v4-flash";
+  generatedAt: string;
+  cached: boolean;
+  dataFingerprint: string;
+  algorithmPredictionSec: number;
+  aiPredictionSec: number;
+  requestedAdjustmentPercent: number;
+  appliedAdjustmentPercent: number;
+  adjustmentStatus: "accepted" | "rejected-outside-range" | "no-adjustment";
+  dynamicRangeSec: { optimistic: number; conservative: number };
+  summary: string;
+  predictionExplanation: string;
+  recentTrend: string;
+  anomalies: AiInsightItem[];
+  risks: AiInsightItem[];
+  recommendations: AiInsightItem[];
+  evidence: AiEvidenceItem[];
+};
+
+export type AiDeepAnalysis = {
+  kind: "deep";
+  model: "deepseek-v4-flash";
+  generatedAt: string;
+  cached: boolean;
+  dataFingerprint: string;
+  flashPredictionSec: number;
+  aiPredictionSec: number;
+  requestedAdjustmentPercent: number;
+  appliedAdjustmentPercent: number;
+  adjustmentStatus: "accepted" | "rejected-outside-range" | "no-adjustment";
+  dynamicRangeSec: { optimistic: number; conservative: number };
+  predictionExplanation: string;
+  evidence: AiEvidenceItem[];
+  overview: string;
+  capabilityEvolution: string;
+  metricConflicts: AiInsightItem[];
+  riskCauses: AiInsightItem[];
+  trainingPlan: AiTrainingWeek[];
+  trainingPlanStartDate: string | null;
+  trainingPlanTargetDate: string | null;
+  trainingPlanDaysRemaining: number | null;
+};
+
+export type AiPredictionSnapshot = {
+  generatedAt: string;
+  dataFingerprint: string;
+  targetDistanceKm: number;
+  targetFinishSec: number | null;
+  targetDate: string | null;
+  algorithmPredictionSec: number;
+  aiPredictionSec: number;
+  adjustmentPercent: number;
+  confidenceScore: number;
+  model: "deepseek-v4-flash";
+};
+
 export type RunnerSex = "female" | "male" | "other" | "prefer-not-to-say";
+
+export type PredictionMode = "distance-date" | "finish-date" | "date-finish";
+
+export type PredictionTargetConfig = {
+  mode: PredictionMode;
+  targetDistanceKm: number;
+  targetFinishSec: number | null;
+  targetDate: string | null;
+};
 
 export type RunnerProfile = {
   birthDate: string | null;
@@ -75,6 +175,7 @@ export type RunnerProfile = {
   heightCm: number | null;
   restingHeartRateBpm: number | null;
   measuredMaxHeartRateBpm: number | null;
+  predictionTarget?: PredictionTargetConfig | null;
   createdAt: string;
   updatedAt: string;
 };

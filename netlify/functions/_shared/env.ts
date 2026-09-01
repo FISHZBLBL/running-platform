@@ -46,6 +46,9 @@ export function jwtSecret(): string {
   if (value) {
     return value;
   }
+  if (getEnv("NETLIFY_DEV") === "true") {
+    return "dev-only-running-platform-secret";
+  }
   if (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime()) {
     throw new Error("JWT_SECRET must be configured in production.");
   }

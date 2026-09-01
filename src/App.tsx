@@ -14,7 +14,13 @@ import { buildHeartRateBaseline, type HeartRateBaseline } from "@shared/physiolo
 import { buildPrediction, buildPredictionBacktest } from "@shared/predictions";
 import { runLocalDate, runLocalMonth } from "@shared/runDates";
 import { normalizeTailDurationInput } from "@shared/timeInputs";
+import { TRAINING_PLAN_SYSTEM_GUIDANCE } from "@shared/aiPrompts";
 import type {
+  AiDeepAnalysis,
+  AiPredictionAnalysis,
+  DeepseekKeyStatus,
+  PredictionMode,
+  PredictionBacktestEntry,
   PredictionBacktestResult,
   PredictionResult,
   PublicUser,
@@ -28,9 +34,9 @@ import type {
 import { TRAINING_PACE_LABELS, VDOT_DISTANCES, buildVdotModel } from "@shared/vdot";
 
 type AuthMode = "login" | "register";
-type PredictionMode = "distance-date" | "finish-date" | "date-finish";
 type AppView = "home" | "records" | "vdot" | "prediction" | "shoes";
 type VolumeChartMode = "weekly" | "monthly";
+type ProCacheStatus = "restored" | "missing" | "outdated" | "target-date-passed" | "target-date-required";
 type HistoryMonth = {
   month: string;
   runs: RunningRecord[];
@@ -274,6 +280,23 @@ function predictionErrorLabel(errorSec: number, actualFinishSec: number): string
   if (Math.abs(errorSec) < 0.5) return "与实际一致";
   const errorPercent = Math.abs(errorSec) / actualFinishSec * 100;
   return `预测偏${errorSec > 0 ? "慢" : "快"} ${formatDuration(Math.abs(errorSec))}（${errorPercent.toFixed(1)}%）`;
+}
+
+function BacktestDetailRow({ entry }: { entry: PredictionBacktestEntry }) {
+  return (
+    <article className="backtest-history-row">
+      <header><span>{entry.date}</span><strong>{entry.benchmarkLabel}</strong></header>
+      <div className="backtest-history-values">
+        <div><span>实际成绩</span><strong>{formatDuration(entry.actualFinishSec)}</strong></div>
+        <div><span>智能预测</span><strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></div>
+        <div><span>VDOT 对照</span><strong>{formatDuration(entry.vdotPredictedFinishSec)}</strong></div>
+      </div>
+      <p className="backtest-history-error">{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</p>
+      <p className="backtest-history-inputs">
+        当时使用 {entry.inputRunCount} 条历史跑步 · {entry.performanceSampleCount} 条表现数据 · {entry.calibrationSampleCount} 条个人校准样本 · 可信度 {entry.smartConfidenceScore}/100
+      </p>
+    </article>
+  );
 }
 
 function formatKm(value: number): string {
@@ -2523,17 +2546,319 @@ function IndependentResearchCharts({ runs, weights }: { runs: RunningRecord[]; w
   );
 }
 
+function clarifyAiText(value: string): string {
+  return value.replace(/PA\s*数据/gi, "跑步表现分析数据");
+}
+
+function AiInsightList({ items }: { items: AiDeepAnalysis["metricConflicts"] }) {
+  if (items.length === 0) return null;
+  return (
+    <div className="ai-signal-list">
+      {items.slice(0, 6).map((item, index) => (
+        <details key={`${item.title}-${index}`}>
+          <summary>
+            <span>{item.severity === "critical" ? "高风险" : item.severity === "warning" ? "需留意" : "观察"}</span>
+            <strong>{item.title}</strong>
+          </summary>
+          <p>{clarifyAiText(item.detail)}</p>
+          {item.evidence ? <small>依据：{clarifyAiText(item.evidence)}</small> : null}
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function FlashAnalysisContent({ analysis }: { analysis: AiPredictionAnalysis }) {
+  return (
+    <>
+      <div className="ai-summary-grid">
+        <article><span>综合结论</span><p>{clarifyAiText(analysis.summary)}</p></article>
+        <article><span>近期能力趋势</span><p>{clarifyAiText(analysis.recentTrend)}</p></article>
+      </div>
+      <AiInsightList items={[...analysis.anomalies, ...analysis.risks].slice(0, 4)} />
+      <details className="ai-adjustment-details">
+        <summary><span>查看算法基线、Flash 调整与依据</span><strong>{signedPercent(analysis.appliedAdjustmentPercent)}</strong></summary>
+        <div className="ai-adjustment-metrics">
+          <div><span>算法基线</span><strong>{formatDuration(analysis.algorithmPredictionSec)}</strong></div>
+          <div><span>Flash 综合预测</span><strong>{formatDuration(analysis.aiPredictionSec)}</strong></div>
+          <div><span>动态区间</span><strong>{formatDuration(analysis.dynamicRangeSec.optimistic)} - {formatDuration(analysis.dynamicRangeSec.conservative)}</strong></div>
+        </div>
+        <p>{clarifyAiText(analysis.predictionExplanation)}</p>
+        {analysis.adjustmentStatus === "rejected-outside-range" ? <p className="ai-boundary-note">Flash 建议超出当前证据区间，数值调整未采用。</p> : null}
+        {analysis.evidence.length > 0 ? (
+          <div className="ai-evidence-list">{analysis.evidence.map((item) => <p key={`${item.metric}-${item.value}`}><strong>{item.metric} · {item.value}</strong><span>{item.impact}</span></p>)}</div>
+        ) : null}
+      </details>
+    </>
+  );
+}
+
+function ProAnalysisContent({ analysis }: { analysis: AiDeepAnalysis }) {
+  return (
+    <>
+      <div className="ai-summary-grid pro-summary-grid">
+        <article><span>综合结论</span><p>{clarifyAiText(analysis.overview)}</p></article>
+        <article><span>能力演变</span><p>{clarifyAiText(analysis.capabilityEvolution)}</p></article>
+      </div>
+      <AiInsightList items={[...analysis.metricConflicts, ...analysis.riskCauses]} />
+      <details className="ai-adjustment-details" open>
+        <summary><span>预测调整与依据</span><strong>{signedPercent(analysis.appliedAdjustmentPercent)}</strong></summary>
+        <div className="ai-adjustment-metrics">
+          <div><span>算法基线</span><strong>{formatDuration(analysis.flashPredictionSec)}</strong></div>
+          <div><span>智能预测</span><strong>{formatDuration(analysis.aiPredictionSec)}</strong></div>
+          <div><span>动态区间</span><strong>{formatDuration(analysis.dynamicRangeSec.optimistic)} - {formatDuration(analysis.dynamicRangeSec.conservative)}</strong></div>
+        </div>
+        <p>{clarifyAiText(analysis.predictionExplanation)}</p>
+        {analysis.adjustmentStatus === "rejected-outside-range" ? <p className="ai-boundary-note">建议超出本地算法动态区间，本次调整未采用。</p> : null}
+        {analysis.evidence.length > 0 ? (
+          <div className="ai-evidence-list">{analysis.evidence.map((item) => <p key={`${item.metric}-${item.value}`}><strong>{item.metric} · {item.value}</strong><span>{item.impact}</span></p>)}</div>
+        ) : null}
+      </details>
+    </>
+  );
+}
+
+function formatKilometerRange(range: { min: number; max: number }): string {
+  return range.min === range.max ? `${range.min} km` : `${range.min}-${range.max} km`;
+}
+
+function TrainingPlanContent({ analysis }: { analysis: AiDeepAnalysis }) {
+  if (!analysis.trainingPlan.length) return null;
+  const remaining = analysis.trainingPlanDaysRemaining === null ? "" : ` · 距比赛 ${analysis.trainingPlanDaysRemaining} 天`;
+  return (
+    <section className="pro-training-plan" aria-label="下一步训练计划">
+      <div className="pro-training-plan-heading">
+        <div><span>下一步训练计划</span><small>{analysis.trainingPlanTargetDate ? `从 ${analysis.trainingPlanStartDate} 到 ${analysis.trainingPlanTargetDate}${remaining}` : `从 ${analysis.trainingPlanStartDate} 起的 6 周能力建设路线`} · 智能生成</small></div>
+        <i>按周执行</i>
+      </div>
+      <div className="pro-training-week-list">
+        {analysis.trainingPlan.map((week) => (
+          <article key={`${week.label}-${week.startDate}`}>
+            <header><strong>{week.label}</strong><span>{week.startDate} 至 {week.endDate}</span></header>
+            <div className="pro-training-week-metrics">
+              <p><span>周跑量</span><strong>{formatKilometerRange(week.weeklyDistanceKm)}</strong></p>
+              <p><span>跑步次数</span><strong>{week.sessionsPerWeek} 次</strong></p>
+              <p><span>长跑</span><strong>{formatKilometerRange(week.longRunKm)}</strong></p>
+            </div>
+            <dl>
+              <div><dt>关键训练</dt><dd>{clarifyAiText(week.keySession)}</dd></div>
+              <div><dt>轻松跑</dt><dd>{clarifyAiText(week.easyRunFocus)}</dd></div>
+              <div><dt>恢复安排</dt><dd>{clarifyAiText(week.recovery)}</dd></div>
+              <details className="plan-adjustment-reason"><summary>调整理由</summary><p>{clarifyAiText(week.adjustmentReason)}</p></details>
+            </dl>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function FlashTrainingPlanContent({ recommendations, warnings }: { recommendations: string[]; warnings: string[] }) {
+  if (!recommendations.length) return null;
+  return (
+    <section className="pro-training-plan flash-training-plan" aria-label="下一步训练计划">
+      <div className="pro-training-plan-heading">
+        <div><span>下一步训练计划</span><small>Flash 基础版 · 生成 Pro 后会替换为按周计划</small></div>
+        <i>基础版</i>
+      </div>
+      <div className="coach-recommendations">
+        {recommendations.map((item, index) => <div key={item}><span>建议 {index + 1}</span><p>{clarifyAiText(item)}</p></div>)}
+      </div>
+      {warnings.length > 0 ? <div className="coach-warning-list">{warnings.map((item) => <p key={item}>{item}</p>)}</div> : null}
+    </section>
+  );
+}
+
+function DeepPromptEditor({
+  id,
+  value,
+  savedValue,
+  saving,
+  error,
+  onChange,
+  onSave,
+  showSystemGuidance = false
+}: {
+  id: string;
+  value: string;
+  savedValue: string;
+  saving: boolean;
+  error: string;
+  onChange: (value: string) => void;
+  onSave: () => Promise<void>;
+  showSystemGuidance?: boolean;
+}) {
+  const dirty = value.trim() !== savedValue;
+  return (
+    <div className="deep-prompt-editor">
+      <label htmlFor={id}>个性化分析提示词 <span>可选 · 账户内同步</span></label>
+      <textarea
+        id={id}
+        value={value}
+        maxLength={1000}
+        rows={3}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="例如：重点关注半程马拉松耐力，训练建议以每周跑 4 次为前提，表达直接一些。"
+      />
+      <div className="deep-prompt-meta">
+        <span>{value.length}/1000 · 影响智能建议重点，不能绕过安全规则</span>
+        <button type="button" className="ghost-button small-button" disabled={!dirty || saving} onClick={() => void onSave().catch(() => undefined)}>
+          {saving ? "保存并分析中..." : dirty ? "保存并重新分析" : "已保存"}
+        </button>
+      </div>
+      {showSystemGuidance ? (
+        <details className="system-prompt-details" open>
+          <summary>内置训练计划提示词 <span>每次智能分析都会使用</span></summary>
+          <p>以下规则由系统固定附加；上方内容是你可自行补充的个性化偏好。</p>
+          <pre>{TRAINING_PLAN_SYSTEM_GUIDANCE}</pre>
+        </details>
+      ) : null}
+      {error ? <p className="target-error">{error}</p> : null}
+    </div>
+  );
+}
+
 function PredictionPanel({
   prediction,
   mode,
   backtest,
-  baseline
+  deepseekConfigured,
+  aiAnalysis,
+  deepAnalysis,
+  aiLoading,
+  deepLoading,
+  deepPhase,
+  deepElapsedSeconds,
+  aiError,
+  deepError,
+  proCacheStatus,
+  deepPrompt,
+  savedDeepPrompt,
+  promptSaving,
+  promptError,
+  onDeepPromptChange,
+  onSaveDeepPrompt,
+  onRequestDeepAnalysis
 }: {
   prediction: PredictionResult | null;
   mode: PredictionMode;
   backtest: PredictionBacktestResult;
-  baseline: HeartRateBaseline;
+  deepseekConfigured: boolean;
+  aiAnalysis: AiPredictionAnalysis | null;
+  deepAnalysis: AiDeepAnalysis | null;
+  aiLoading: boolean;
+  deepLoading: boolean;
+  deepPhase: "preparing" | "analyzing" | "finalizing";
+  deepElapsedSeconds: number;
+  aiError: string;
+  deepError: string;
+  proCacheStatus: ProCacheStatus;
+  deepPrompt: string;
+  savedDeepPrompt: string;
+  promptSaving: boolean;
+  promptError: string;
+  onDeepPromptChange: (value: string) => void;
+  onSaveDeepPrompt: () => Promise<void>;
+  onRequestDeepAnalysis: (force?: boolean) => void;
 }) {
+  const [backtestPhase, setBacktestPhase] = useState<"collapsed" | "expanding-latest" | "expanding-history" | "expanded" | "collapsing-history" | "collapsing-latest">("collapsed");
+  const [backtestRevealedCount, setBacktestRevealedCount] = useState(0);
+  const [activeBacktestFlipIndex, setActiveBacktestFlipIndex] = useState<number | null>(null);
+  const backtestFlipTimers = useRef<number[]>([]);
+
+  useEffect(() => () => {
+    backtestFlipTimers.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  function expandBacktestHistory() {
+    if (backtestPhase !== "collapsed") return;
+    const latestEntryCount = Math.min(3, backtest.sampleCount);
+    const historyEntryCount = Math.max(0, backtest.sampleCount - latestEntryCount);
+    if (latestEntryCount === 0) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setBacktestRevealedCount(latestEntryCount);
+      setBacktestPhase("expanded");
+      return;
+    }
+
+    function openHistoryEntries() {
+      if (historyEntryCount === 0) {
+        setBacktestPhase("expanded");
+        backtestFlipTimers.current = [];
+        return;
+      }
+
+      setBacktestPhase("expanding-history");
+      const completeTimer = window.setTimeout(() => {
+        setBacktestPhase("expanded");
+        backtestFlipTimers.current = [];
+      }, historyEntryCount * 95 + 135);
+      backtestFlipTimers.current.push(completeTimer);
+    }
+
+    function flipEntry(index: number) {
+      setActiveBacktestFlipIndex(index);
+      const revealTimer = window.setTimeout(() => setBacktestRevealedCount(index + 1), 85);
+      const nextTimer = window.setTimeout(() => {
+        if (index + 1 < latestEntryCount) {
+          flipEntry(index + 1);
+          return;
+        }
+        setActiveBacktestFlipIndex(null);
+        openHistoryEntries();
+      }, 180);
+      backtestFlipTimers.current.push(revealTimer, nextTimer);
+    }
+
+    backtestFlipTimers.current.forEach((timer) => window.clearTimeout(timer));
+    backtestFlipTimers.current = [];
+    setBacktestPhase("expanding-latest");
+    flipEntry(0);
+  }
+
+  function collapseBacktestHistory() {
+    if (backtestPhase !== "expanded") return;
+    const latestEntryCount = Math.min(3, backtest.sampleCount);
+    const historyEntryCount = Math.max(0, backtest.sampleCount - latestEntryCount);
+    backtestFlipTimers.current.forEach((timer) => window.clearTimeout(timer));
+    backtestFlipTimers.current = [];
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      setActiveBacktestFlipIndex(null);
+      setBacktestRevealedCount(0);
+      setBacktestPhase("collapsed");
+      return;
+    }
+
+    function flipLatestEntryBack(index: number) {
+      if (index < 0) {
+        setActiveBacktestFlipIndex(null);
+        setBacktestPhase("collapsed");
+        backtestFlipTimers.current = [];
+        return;
+      }
+
+      setBacktestPhase("collapsing-latest");
+      setActiveBacktestFlipIndex(index);
+      const concealTimer = window.setTimeout(() => setBacktestRevealedCount(index), 65);
+      const nextTimer = window.setTimeout(() => flipLatestEntryBack(index - 1), 140);
+      backtestFlipTimers.current.push(concealTimer, nextTimer);
+    }
+
+    function closeHistoryEntries() {
+      setBacktestPhase("collapsing-history");
+      const completeTimer = window.setTimeout(() => {
+        flipLatestEntryBack(latestEntryCount - 1);
+      }, historyEntryCount * 48 + 105);
+      backtestFlipTimers.current.push(completeTimer);
+    }
+
+    if (historyEntryCount === 0) {
+      flipLatestEntryBack(latestEntryCount - 1);
+      return;
+    }
+    closeHistoryEntries();
+  }
+
   if (!prediction) {
     return <div className="panel muted-panel">等待预测数据...</div>;
   }
@@ -2564,7 +2889,13 @@ function PredictionPanel({
   const smartConfidence = smart
     ? `${smart.confidence === "high" ? "高" : smart.confidence === "medium" ? "中" : "低"}可信 · ${smart.confidenceScore}/100`
     : "数据不足";
-  const smartFinishText = smart ? formatDuration(smart.predictedFinishSec) : vdotFinishText;
+  const smartFinishText = deepAnalysis
+    ? formatDuration(deepAnalysis.aiPredictionSec)
+    : aiAnalysis
+      ? formatDuration(aiAnalysis.aiPredictionSec)
+      : smart
+        ? formatDuration(smart.predictedFinishSec)
+        : vdotFinishText;
   const coveragePercent = prediction.targetDistanceKm > 0
     ? Math.min(100, Math.round((prediction.longestDistanceKm / prediction.targetDistanceKm) * 100))
     : 0;
@@ -2581,7 +2912,11 @@ function PredictionPanel({
   const improvement = backtest.smartImprovementPercent;
   const errorScale = Math.max(vdotError ?? 0, smartError ?? 0, 1);
   const actionable = prediction.recommendations.filter((item) => /训练|跑量|节奏|长距离|恢复|配速|距离/.test(item));
-  const trainingRecommendations = [...new Set([...actionable, ...prediction.recommendations])].slice(0, 3);
+  const flashTrainingRecommendations = [...new Set([
+    ...(aiAnalysis?.recommendations.map((item) => item.title) ?? []),
+    ...actionable,
+    ...prediction.recommendations
+  ])].slice(0, 3);
   const confidenceLabel = smart
     ? smart.confidence === "high"
       ? "高可信"
@@ -2589,6 +2924,14 @@ function PredictionPanel({
         ? "中可信"
         : "低可信"
     : "数据不足";
+  const deepPhaseIndex = deepPhase === "preparing" ? 0 : deepPhase === "analyzing" ? 1 : 2;
+  const deepPhaseLabels = ["准备数据", "智能分析中", "整理结果"];
+  const backtestEntries = [...backtest.entries].reverse();
+  const latestBacktestEntries = backtestEntries.slice(0, 3);
+  const historyBacktestEntries = backtestEntries.slice(latestBacktestEntries.length);
+  const backtestIsOpen = backtestPhase !== "collapsed";
+  const backtestIsAnimating = backtestPhase !== "collapsed" && backtestPhase !== "expanded";
+  const showHistoryBacktestEntries = backtestPhase === "expanding-history" || backtestPhase === "expanded" || backtestPhase === "collapsing-history";
   return (
     <section className="panel prediction-panel prediction-fusion-panel">
       <div className="prediction-core">
@@ -2641,6 +2984,81 @@ function PredictionPanel({
         </div>
       </div>
 
+      <section className="ai-analysis-sheet" aria-live="polite">
+        <div className="prediction-section-heading compact-heading">
+          <div>
+            <h3>智能训练建议</h3>
+            <span>数据或目标变化后自动更新一次；无变化时直接展示已保存结果。</span>
+          </div>
+          {deepLoading ? (
+            <i className="ai-model-badge pro-badge">智能分析中</i>
+          ) : deepAnalysis ? (
+            <i className="ai-model-badge pro-badge">{deepAnalysis.cached ? "已保存" : "已更新"}</i>
+          ) : aiAnalysis ? (
+            <i className="ai-model-badge">Flash · {aiAnalysis.cached ? "缓存" : "新分析"}</i>
+          ) : null}
+        </div>
+        {!deepseekConfigured ? (
+          <p className="ai-empty-state">在右上角个人资料中配置 DeepSeek API Key 后启用。现有算法预测仍可正常使用。</p>
+        ) : aiLoading ? (
+          <p className="ai-loading-state"><i />正在恢复已保存的分析或检查最新数据...</p>
+        ) : aiError ? (
+          <p className="coach-warning-list ai-error-state">{aiError}</p>
+        ) : deepLoading ? (
+          <div className="deep-progress-card" role="status" aria-label={`${deepPhaseLabels[deepPhaseIndex]}，已等待 ${deepElapsedSeconds} 秒`}>
+            <div className="deep-progress-orbit"><i /><span>AI</span></div>
+            <div className="deep-progress-copy">
+              <strong>{deepPhaseLabels[deepPhaseIndex]}</strong>
+              <span>已等待 {deepElapsedSeconds} 秒 · 请保持页面开启</span>
+            </div>
+            <ol>
+              {deepPhaseLabels.map((label, index) => (
+                <li key={label} className={index < deepPhaseIndex ? "complete" : index === deepPhaseIndex ? "active" : ""}>
+                  <i>{index < deepPhaseIndex ? "✓" : index + 1}</i><span>{label}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : deepAnalysis && aiAnalysis ? (
+          <>
+            <ProAnalysisContent analysis={deepAnalysis} />
+            <TrainingPlanContent analysis={deepAnalysis} />
+            <DeepPromptEditor id="prediction-analysis-prompt" value={deepPrompt} savedValue={savedDeepPrompt} saving={promptSaving} error={promptError} onChange={onDeepPromptChange} onSave={onSaveDeepPrompt} />
+          </>
+        ) : aiAnalysis ? (
+          <>
+            {deepError ? (
+              <div className="deep-error-banner">
+                <span>{deepError}</span>
+                <button type="button" className="ghost-button small-button" onClick={() => onRequestDeepAnalysis()}>重新尝试</button>
+              </div>
+            ) : null}
+            {proCacheStatus === "outdated" ? <p className="ai-boundary-note">历史 Pro 缓存不包含新版逐周训练计划，已切换至 Flash；需要时可手动生成新版 Pro。</p> : null}
+            {proCacheStatus === "target-date-required" ? <p className="ai-boundary-note">请先在上方选择“目标距离 + 达成日期”并点击“更新预测”；Pro 才会生成按周训练计划。</p> : null}
+            {proCacheStatus === "target-date-passed" ? <p className="ai-boundary-note">目标比赛日期已过，请先修改为未来日期后再生成 Pro 训练计划。</p> : null}
+            <FlashAnalysisContent analysis={aiAnalysis} />
+            <FlashTrainingPlanContent recommendations={flashTrainingRecommendations} warnings={prediction.warnings} />
+            <DeepPromptEditor
+              id="prediction-flash-analysis-prompt"
+              value={deepPrompt}
+              savedValue={savedDeepPrompt}
+              saving={promptSaving}
+              error={promptError}
+              onChange={onDeepPromptChange}
+              onSave={onSaveDeepPrompt}
+            />
+            {proCacheStatus !== "target-date-passed" && proCacheStatus !== "target-date-required" ? (
+              <div className="deep-analysis-action">
+                <div><strong>需要更完整的训练规划？</strong><span>Pro 会替代当前主分析，并在本地动态区间内给出最终预测调整。</span></div>
+                <button type="button" className="ghost-button" onClick={() => onRequestDeepAnalysis()}>生成深度分析</button>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="ai-empty-state">当前数据不足，暂时保留现有算法预测。</p>
+        )}
+      </section>
+
       <div className="prediction-roadmap">
         <div className="prediction-section-heading">
           <h3>{prediction.targetDistanceKm >= 20 ? "半程马拉松达标路线" : `${prediction.targetDistanceKm.toFixed(1)} km 达标路线`}</h3>
@@ -2654,8 +3072,7 @@ function PredictionPanel({
         </div>
       </div>
 
-      <div className="prediction-lower-grid">
-        <div className="prediction-analysis-grid">
+      <div className="prediction-analysis-grid">
           <section className="prediction-factor-sheet">
             <div className="prediction-section-heading compact-heading">
               <h3>智能模型影响因素</h3><span>{smartConfidence}</span>
@@ -2682,7 +3099,19 @@ function PredictionPanel({
 
           <section className="prediction-backtest-sheet">
             <div className="prediction-section-heading compact-heading">
-              <h3>历史预测回测</h3><span>{backtest.status === "ready" ? `${backtest.sampleCount} 条样本` : "等待样本"}</span>
+              <h3>历史预测回测</h3>
+              {backtest.status === "ready" ? (
+                <button
+                  type="button"
+                  className={`backtest-history-toggle backtest-heading-toggle${backtestIsOpen ? " is-open" : ""}`}
+                  aria-expanded={backtestIsOpen}
+                  aria-controls="prediction-backtest-history"
+                  onClick={backtestIsOpen ? collapseBacktestHistory : expandBacktestHistory}
+                  disabled={backtestIsAnimating}
+                >
+                  <span>全部参与回测的数据</span><strong>{backtest.sampleCount} 条</strong>
+                </button>
+              ) : <span>等待样本</span>}
             </div>
             {backtest.status === "ready" ? (
               <>
@@ -2691,62 +3120,50 @@ function PredictionPanel({
                   <div><i className="smart-bar" style={{ height: `${Math.max(22, ((smartError ?? 0) / errorScale) * 100)}%` }}>{smartError?.toFixed(1)}%</i><span>智能模型</span></div>
                   <p>智能误差改善 <strong>{signedPercent(improvement)}</strong></p>
                 </div>
-                <div className="backtest-latest-list" aria-label="最近三条历史回测">
-                  {backtest.entries.slice(-3).reverse().map((entry) => (
-                    <div key={entry.runId} className="backtest-latest-row">
-                      <span>{entry.date} · {entry.benchmarkLabel}</span>
-                      <div>
-                        <span>智能预测 <strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></span>
-                        <span>实际 <strong>{formatDuration(entry.actualFinishSec)}</strong></span>
+                <div
+                  id="prediction-backtest-history"
+                  className="backtest-records-stage"
+                >
+                  <div className="backtest-latest-list" aria-label="最近三条历史回测">
+                    {latestBacktestEntries.map((entry, index) => (
+                      <div key={entry.runId} className={`backtest-reveal-row${activeBacktestFlipIndex === index ? " is-flipping" : ""}${backtestPhase === "collapsing-latest" ? " is-collapsing" : ""}`}>
+                        {index < backtestRevealedCount ? (
+                          <BacktestDetailRow entry={entry} />
+                        ) : (
+                          <div className="backtest-latest-row">
+                            <span>{entry.date} · {entry.benchmarkLabel}</span>
+                            <div>
+                              <span>智能预测 <strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></span>
+                              <span>实际 <strong>{formatDuration(entry.actualFinishSec)}</strong></span>
+                            </div>
+                            <small>{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</small>
+                          </div>
+                        )}
                       </div>
-                      <small>{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</small>
-                    </div>
-                  ))}
-                </div>
-                <details className="backtest-history">
-                  <summary><span>全部参与回测的数据</span><strong>{backtest.sampleCount} 条</strong></summary>
-                  <p>按日期倒序展示；每次预测只使用该日期之前的跑步和回测样本。</p>
-                  <div className="backtest-history-list">
-                    {[...backtest.entries].reverse().map((entry) => (
-                      <article key={entry.runId} className="backtest-history-row">
-                        <header><span>{entry.date}</span><strong>{entry.benchmarkLabel}</strong></header>
-                        <div className="backtest-history-values">
-                          <div><span>实际成绩</span><strong>{formatDuration(entry.actualFinishSec)}</strong></div>
-                          <div><span>智能预测</span><strong>{formatDuration(entry.smartPredictedFinishSec)}</strong></div>
-                          <div><span>VDOT 对照</span><strong>{formatDuration(entry.vdotPredictedFinishSec)}</strong></div>
-                        </div>
-                        <p className="backtest-history-error">{predictionErrorLabel(entry.smartErrorSec, entry.actualFinishSec)}</p>
-                        <p className="backtest-history-inputs">
-                          当时使用 {entry.inputRunCount} 条历史跑步 · {entry.performanceSampleCount} 条表现数据 · {entry.calibrationSampleCount} 条个人校准样本 · 可信度 {entry.smartConfidenceScore}/100
-                        </p>
-                      </article>
                     ))}
                   </div>
-                </details>
+                  {showHistoryBacktestEntries ? (
+                    <>
+                      <p className="backtest-history-intro">按日期倒序展示；每次预测只使用该日期之前的跑步和回测样本。</p>
+                      <div id="prediction-backtest-history-list" className="backtest-history-list" aria-label="其余参与回测的数据">
+                        {historyBacktestEntries.map((entry, index) => (
+                          <div
+                            key={entry.runId}
+                              className={`backtest-history-shutter${backtestPhase === "expanding-history" ? " is-opening" : backtestPhase === "collapsing-history" ? " is-closing" : ""}`}
+                              style={{ animationDelay: `${backtestPhase === "collapsing-history" ? (historyBacktestEntries.length - index - 1) * 48 : index * 95}ms` }}
+                          >
+                            <div className="backtest-history-shutter-content">
+                              <BacktestDetailRow entry={entry} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
               </>
             ) : <p className="muted-text">系统会使用历史 PB 与比赛记录验证预测误差。</p>}
           </section>
-        </div>
-
-        <aside className="prediction-coach-rail">
-          <div className="prediction-section-heading compact-heading"><div><h3>下一步训练</h3><span>根据当前预测生成的行动重点</span></div></div>
-          <div className="coach-recommendations">
-            {trainingRecommendations.map((item, index) => (
-              <div key={item}><span>建议 {index + 1}</span><p>{item}</p></div>
-            ))}
-          </div>
-          {prediction.warnings.length > 0 && (
-            <div className="coach-warning-list">{prediction.warnings.map((item) => <p key={item}>{item}</p>)}</div>
-          )}
-          <div className="coach-heart-zones">
-            <div className="prediction-section-heading compact-heading"><h3>心率分区</h3><span>{baseline.effectiveMaxHeartRateBpm ? `最大心率 ${baseline.effectiveMaxHeartRateBpm}` : "待补充出生日期"}</span></div>
-            {baseline.zones.length > 0 ? (
-              <div className="coach-zone-strip">
-                {baseline.zones.map((zone) => <div key={zone.zone} className={`zone-${zone.zone}`}><span>Z{zone.zone}</span><strong>{zone.minBpm}-{zone.maxBpm}</strong></div>)}
-              </div>
-            ) : <p className="muted-text">填写出生日期后自动生成心率分区。</p>}
-          </div>
-        </aside>
       </div>
     </section>
   );
@@ -2769,18 +3186,36 @@ function nullableDraftNumber(value: string): number | null {
 function RunnerProfileMenu({
   username,
   profile,
+  deepseekStatus,
+  deepPrompt,
+  promptSaving,
+  promptError,
   onSaved,
+  onDeepseekStatusChanged,
+  onDeepPromptChange,
+  onSaveDeepPrompt,
   onLogout
 }: {
   username: string;
   profile: RunnerProfile | null;
+  deepseekStatus: DeepseekKeyStatus;
+  deepPrompt: string;
+  promptSaving: boolean;
+  promptError: string;
   onSaved: (profile: RunnerProfile) => void;
+  onDeepseekStatusChanged: (status: DeepseekKeyStatus) => void;
+  onDeepPromptChange: (value: string) => void;
+  onSaveDeepPrompt: () => Promise<void>;
   onLogout: () => void;
 }) {
   const [draft, setDraft] = useState<RunnerProfileDraft>(() => runnerProfileDraft(profile));
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [keyDraft, setKeyDraft] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyMessage, setKeyMessage] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -2819,6 +3254,7 @@ function RunnerProfileMenu({
         heightCm: nullableDraftNumber(draft.heightCm),
         restingHeartRateBpm: null,
         measuredMaxHeartRateBpm: null,
+        predictionTarget: profile?.predictionTarget ?? null,
         createdAt: profile?.createdAt ?? now,
         updatedAt: now
       };
@@ -2829,6 +3265,39 @@ function RunnerProfileMenu({
       setMessage(error instanceof Error ? error.message : "保存个人资料失败。");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveDeepseekKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setKeyBusy(true);
+    setKeyMessage("");
+    try {
+      const result = await api.saveDeepseekKey(keyDraft);
+      onDeepseekStatusChanged(result.deepseek);
+      setKeyDraft("");
+      setShowKey(false);
+      setKeyMessage("API Key 验证成功并已加密保存。");
+    } catch (error) {
+      setKeyMessage(error instanceof Error ? error.message : "保存 DeepSeek API Key 失败。");
+    } finally {
+      setKeyBusy(false);
+    }
+  }
+
+  async function deleteDeepseekKey() {
+    if (!window.confirm("确定删除当前账户绑定的 DeepSeek API Key 吗？历史分析会保留。")) return;
+    setKeyBusy(true);
+    setKeyMessage("");
+    try {
+      const result = await api.deleteDeepseekKey();
+      onDeepseekStatusChanged(result.deepseek);
+      setKeyDraft("");
+      setKeyMessage("DeepSeek API Key 已删除，历史分析仍然保留。");
+    } catch (error) {
+      setKeyMessage(error instanceof Error ? error.message : "删除 DeepSeek API Key 失败。");
+    } finally {
+      setKeyBusy(false);
     }
   }
 
@@ -2878,6 +3347,60 @@ function RunnerProfileMenu({
           <button type="button" className="ghost-button profile-logout-action" onClick={onLogout}>退出账户</button>
           {message && <p className="form-message profile-message">{message}</p>}
         </form>
+        <section className="deepseek-settings" aria-labelledby="deepseek-settings-title">
+          <div className="deepseek-settings-heading">
+            <div>
+              <span>AI Service</span>
+              <h3 id="deepseek-settings-title">DeepSeek 智能分析</h3>
+            </div>
+            <i className={deepseekStatus.configured ? "configured" : ""}>
+              {deepseekStatus.configured ? "已配置" : "未配置"}
+            </i>
+          </div>
+          {deepseekStatus.configured ? (
+            <p className="deepseek-key-status">
+              当前密钥 <strong>{deepseekStatus.maskedKey}</strong>
+              <small>保存后不会再次显示完整 Key</small>
+            </p>
+          ) : (
+            <p className="deepseek-key-help">绑定个人 API Key 后，进入预测页才会按最新数据生成分析。</p>
+          )}
+          <form className="deepseek-key-form" onSubmit={saveDeepseekKey}>
+            <label>
+              {deepseekStatus.configured ? "替换 API Key" : "API Key"}
+              <span className="secret-input-wrap">
+                <input
+                  type={showKey ? "text" : "password"}
+                  autoComplete="off"
+                  value={keyDraft}
+                  onChange={(event) => setKeyDraft(event.target.value)}
+                  placeholder="sk-..."
+                  disabled={keyBusy}
+                />
+                <button type="button" onClick={() => setShowKey((current) => !current)}>{showKey ? "隐藏" : "显示"}</button>
+              </span>
+            </label>
+            <div className="deepseek-key-actions">
+              <button className="primary-button" disabled={keyBusy || !keyDraft.trim()}>
+                {keyBusy ? "验证中..." : "验证并保存"}
+              </button>
+              {deepseekStatus.configured ? (
+                <button type="button" className="danger-text-button" disabled={keyBusy} onClick={deleteDeepseekKey}>删除 Key</button>
+              ) : null}
+            </div>
+          </form>
+          {keyMessage ? <p className="form-message profile-message">{keyMessage}</p> : null}
+          <DeepPromptEditor
+            id="profile-analysis-prompt"
+            value={deepPrompt}
+            savedValue={deepseekStatus.customPrompt}
+            saving={promptSaving}
+            error={promptError}
+            onChange={onDeepPromptChange}
+            onSave={onSaveDeepPrompt}
+            showSystemGuidance
+          />
+        </section>
         </div>
       ) : null}
     </div>
@@ -4059,7 +4582,20 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   const [shoes, setShoes] = useState<RunningShoe[]>([]);
   const [weights, setWeights] = useState<WeightRecord[]>([]);
   const [runnerProfile, setRunnerProfile] = useState<RunnerProfile | null>(null);
+  const [deepseekStatus, setDeepseekStatus] = useState<DeepseekKeyStatus>({ configured: false, maskedKey: null, updatedAt: null, customPrompt: "" });
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<AiPredictionAnalysis | null>(null);
+  const [deepAnalysis, setDeepAnalysis] = useState<AiDeepAnalysis | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [deepLoading, setDeepLoading] = useState(false);
+  const [deepPhase, setDeepPhase] = useState<"preparing" | "analyzing" | "finalizing">("preparing");
+  const [deepElapsedSeconds, setDeepElapsedSeconds] = useState(0);
+  const [aiError, setAiError] = useState("");
+  const [deepError, setDeepError] = useState("");
+  const [proCacheStatus, setProCacheStatus] = useState<ProCacheStatus>("missing");
+  const [deepPrompt, setDeepPrompt] = useState("");
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptError, setPromptError] = useState("");
   const [targetDistance, setTargetDistance] = useState(21.0975);
   const [targetDistanceInput, setTargetDistanceInput] = useState("21.0975");
   const [predictionMode, setPredictionMode] = useState<PredictionMode>("distance-date");
@@ -4092,16 +4628,33 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   async function refresh() {
     setLoading(true);
-    const [runData, shoeData, weightData, profileData] = await Promise.all([
+    const [runData, shoeData, weightData, profileData, aiSettingsData] = await Promise.all([
       api.listRuns(),
       api.listShoes(),
       api.listWeights(),
-      api.getRunnerProfile()
+      api.getRunnerProfile(),
+      api.getDeepseekSettings().catch(() => ({ deepseek: { configured: false, maskedKey: null, updatedAt: null, customPrompt: "" } satisfies DeepseekKeyStatus }))
     ]);
     setRuns(sortRuns(runData.runs));
     setShoes(sortShoes(shoeData.shoes));
     setWeights(sortWeights(weightData.weights));
     setRunnerProfile(profileData.profile);
+    const savedTarget = profileData.profile?.predictionTarget;
+    if (savedTarget) {
+      setTargetDistance(savedTarget.targetDistanceKm);
+      setTargetDistanceInput(String(savedTarget.targetDistanceKm));
+      setPredictionMode(savedTarget.mode);
+      setAppliedPredictionMode(savedTarget.mode);
+      const finishInput = savedTarget.targetFinishSec ? formatDuration(savedTarget.targetFinishSec) : "2:00:00";
+      setTargetFinishInput(finishInput);
+      setAppliedTargetFinishInput(finishInput);
+      if (savedTarget.targetDate) {
+        setTargetDateInput(savedTarget.targetDate);
+        setAppliedTargetDateInput(savedTarget.targetDate);
+      }
+    }
+    setDeepseekStatus(aiSettingsData.deepseek);
+    setDeepPrompt(aiSettingsData.deepseek.customPrompt);
     setLoading(false);
   }
 
@@ -4122,6 +4675,117 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       setPrediction(null);
     }
   }, [runs, weights, runnerProfile, targetDistance, appliedPredictionMode, appliedTargetFinishInput, appliedTargetDateInput]);
+
+  const aiTargetFinishSec = appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null;
+  const aiTargetDate = appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null;
+
+  useEffect(() => {
+    if (activeView !== "prediction" || !deepseekStatus.configured || prediction?.status !== "ready") return;
+    let ignore = false;
+    setAiAnalysis(null);
+    setDeepAnalysis(null);
+    setDeepError("");
+    setProCacheStatus("missing");
+    setAiLoading(true);
+    setAiError("");
+    api.aiPrediction({
+      kind: "current",
+      targetDistanceKm: targetDistance,
+      targetFinishSec: aiTargetFinishSec,
+      targetDate: aiTargetDate
+    }).then((result) => {
+      if (!ignore) {
+        setProCacheStatus(result.proCacheStatus ?? "missing");
+        if (result.analysis.kind === "deep") {
+          setDeepAnalysis(result.analysis);
+          if (result.standard) setAiAnalysis(result.standard);
+        } else {
+          setAiAnalysis(result.analysis);
+          setDeepAnalysis(null);
+        }
+      }
+    }).catch((error) => {
+      if (!ignore) setAiError(error instanceof Error ? error.message : "AI 分析生成失败。");
+    }).finally(() => {
+      if (!ignore) setAiLoading(false);
+    });
+    return () => { ignore = true; };
+  }, [
+    activeView,
+    deepseekStatus.configured,
+    prediction?.status,
+    targetDistance,
+    aiTargetFinishSec,
+    aiTargetDate,
+    runs,
+    weights,
+    runnerProfile
+  ]);
+
+  useEffect(() => {
+    if (!deepLoading) return;
+    setDeepElapsedSeconds(0);
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setDeepElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [deepLoading]);
+
+  async function saveDeepPrompt(regenerate = true): Promise<void> {
+    setPromptSaving(true);
+    setPromptError("");
+    try {
+      const result = await api.saveDeepseekPrompt(deepPrompt);
+      setDeepseekStatus(result.deepseek);
+      setDeepPrompt(result.deepseek.customPrompt);
+      if (regenerate && result.deepseek.configured && prediction?.status === "ready") {
+        await generateDeepAnalysis(true).catch(() => undefined);
+      }
+    } catch (error) {
+      setPromptError(error instanceof Error ? error.message : "个性化提示词保存失败。");
+      throw error;
+    } finally {
+      setPromptSaving(false);
+    }
+  }
+
+  async function generateDeepAnalysis(force = false): Promise<void> {
+    setDeepLoading(true);
+    setDeepPhase("preparing");
+    setDeepError("");
+    try {
+      setDeepPhase("analyzing");
+      const result = await api.aiPrediction({
+        kind: "deep",
+        targetDistanceKm: targetDistance,
+        targetFinishSec: aiTargetFinishSec,
+        targetDate: aiTargetDate,
+        force
+      });
+      setDeepPhase("finalizing");
+      await new Promise((resolve) => window.setTimeout(resolve, 320));
+      if (result.analysis.kind === "deep") setDeepAnalysis(result.analysis);
+      if (result.standard) setAiAnalysis(result.standard);
+      if (result.analysis.kind === "deep") setProCacheStatus("restored");
+    } catch (error) {
+      setDeepError(error instanceof Error ? error.message : "深度分析生成失败。");
+      throw error;
+    } finally {
+      setDeepLoading(false);
+    }
+  }
+
+  async function requestDeepAnalysis(force = false) {
+    if (deepPrompt.trim() !== deepseekStatus.customPrompt) {
+      try {
+        await saveDeepPrompt(false);
+      } catch {
+        return;
+      }
+    }
+    await generateDeepAnalysis(force).catch(() => undefined);
+  }
 
   function upsertRun(run: RunningRecord) {
     setRuns((current) => sortRuns([run, ...current.filter((item) => item.id !== run.id)]));
@@ -4161,7 +4825,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     targetFinishInput !== appliedTargetFinishInput ||
     targetDateInput !== appliedTargetDateInput;
 
-  function applyPredictionTarget(event?: FormEvent<HTMLFormElement>) {
+  async function applyPredictionTarget(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const trimmedDistance = targetDistanceInput.trim();
     if (!isCompleteDecimalInput(trimmedDistance)) {
@@ -4175,6 +4839,31 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       return;
     }
 
+    const nextMode = predictionMode;
+    const nextFinishSec = nextMode === "finish-date" ? parseDuration(targetFinishInput) : null;
+    const nextDate = nextMode === "date-finish" ? targetDateInput : null;
+    if (nextMode === "date-finish" && (typeof nextDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(nextDate))) {
+      setTargetError("请选择有效的目标日期。");
+      return;
+    }
+    const now = new Date().toISOString();
+    const profilePayload: RunnerProfile = {
+      birthDate: runnerProfile?.birthDate ?? null,
+      sex: runnerProfile?.sex ?? null,
+      heightCm: runnerProfile?.heightCm ?? null,
+      restingHeartRateBpm: runnerProfile?.restingHeartRateBpm ?? null,
+      measuredMaxHeartRateBpm: runnerProfile?.measuredMaxHeartRateBpm ?? null,
+      predictionTarget: { mode: nextMode, targetDistanceKm: nextDistance, targetFinishSec: nextFinishSec, targetDate: nextDate },
+      createdAt: runnerProfile?.createdAt ?? now,
+      updatedAt: now
+    };
+    try {
+      const saved = (await api.saveRunnerProfile(profilePayload)).profile;
+      setRunnerProfile(saved);
+    } catch (error) {
+      setTargetError(error instanceof Error ? `目标未保存：${error.message}` : "目标保存失败，请稍后重试。");
+      return;
+    }
     setTargetError("");
     setTargetDistance(nextDistance);
     setTargetDistanceInput(String(nextDistance));
@@ -4259,7 +4948,28 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
           </nav>
         </div>
         <div className="user-actions">
-          <RunnerProfileMenu username={user.username} profile={runnerProfile} onSaved={setRunnerProfile} onLogout={onLogout} />
+          <RunnerProfileMenu
+            username={user.username}
+            profile={runnerProfile}
+            deepseekStatus={deepseekStatus}
+            deepPrompt={deepPrompt}
+            promptSaving={promptSaving}
+            promptError={promptError}
+            onSaved={setRunnerProfile}
+            onDeepseekStatusChanged={(status) => {
+              setDeepseekStatus(status);
+              if (!status.configured) {
+                setAiAnalysis(null);
+                setDeepAnalysis(null);
+              }
+            }}
+            onDeepPromptChange={(value) => {
+              setDeepPrompt(value.slice(0, 1000));
+              setPromptError("");
+            }}
+            onSaveDeepPrompt={saveDeepPrompt}
+            onLogout={onLogout}
+          />
           <button className="ghost-button desktop-logout-button" onClick={onLogout}>退出</button>
         </div>
       </header>
@@ -4348,7 +5058,26 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             prediction={prediction}
             mode={appliedPredictionMode}
             backtest={predictionBacktest}
-            baseline={heartRateBaseline}
+            deepseekConfigured={deepseekStatus.configured}
+            aiAnalysis={aiAnalysis}
+            deepAnalysis={deepAnalysis}
+            aiLoading={aiLoading}
+            deepLoading={deepLoading}
+            deepPhase={deepPhase}
+            deepElapsedSeconds={deepElapsedSeconds}
+            aiError={aiError}
+            deepError={deepError}
+            proCacheStatus={proCacheStatus}
+            deepPrompt={deepPrompt}
+            savedDeepPrompt={deepseekStatus.customPrompt}
+            promptSaving={promptSaving}
+            promptError={promptError}
+            onDeepPromptChange={(value) => {
+              setDeepPrompt(value.slice(0, 1000));
+              setPromptError("");
+            }}
+            onSaveDeepPrompt={saveDeepPrompt}
+            onRequestDeepAnalysis={requestDeepAnalysis}
           />
         </section>
       )}

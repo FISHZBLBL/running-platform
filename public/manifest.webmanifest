@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "Running Platform 跑步数据平台",
+  "short_name": "跑步平台",
+  "description": "记录、分析和预测个人跑步数据。",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f7fb",
+  "theme_color": "#176d9d",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

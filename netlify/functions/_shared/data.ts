@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
   keepKey,
+  aiDeepAnalysisKey,
+  aiPredictionHistoryKey,
+  aiPredictionLatestKey,
+  deepseekSecretKey,
+  deepseekPreferencesKey,
   profileKey,
   runnerProfileKey,
   runKey,
@@ -13,11 +18,27 @@ import {
   weightsIndexKey,
   weightsPrefix
 } from "../../../shared/cosKeys";
-import type { RunnerProfile, RunningRecord, RunningShoe, UserProfile, WeightRecord } from "../../../shared/types";
+import type {
+  AiDeepAnalysis,
+  AiPredictionAnalysis,
+  AiPredictionSnapshot,
+  RunnerProfile,
+  RunningRecord,
+  RunningShoe,
+  UserProfile,
+  WeightRecord
+} from "../../../shared/types";
 import { storage } from "./storage";
+import type { EncryptedSecret } from "./secrets";
 
 const INDEX_LOCK_STALE_MS = 90_000;
 const INDEX_LOCK_ATTEMPTS = 20;
+
+type LockOptions = {
+  attempts?: number;
+  staleMs?: number;
+  heartbeatMs?: number;
+};
 
 type LockRecord = {
   owner: string;
@@ -69,28 +90,57 @@ async function releaseLock(lockKey: string, owner: string): Promise<void> {
   }
 }
 
-async function withIndexLock<T>(indexKey: string, task: () => Promise<T>): Promise<T> {
+async function withIndexLock<T>(indexKey: string, task: () => Promise<T>, options: LockOptions = {}): Promise<T> {
   const lockKey = `${indexKey}.lock`;
   const owner = randomUUID();
+  const attempts = options.attempts ?? INDEX_LOCK_ATTEMPTS;
+  const staleMs = options.staleMs ?? INDEX_LOCK_STALE_MS;
+  const heartbeatMs = options.heartbeatMs;
 
-  for (let attempt = 0; attempt < INDEX_LOCK_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const lock: LockRecord = { owner, acquiredAt: Date.now() };
     if (await storage().putTextIfAbsent(lockKey, JSON.stringify(lock))) {
+      const heartbeatKey = `${lockKey}.heartbeat.${owner}`;
+      let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+      if (heartbeatMs) {
+        const heartbeat = async () => storage().putText(heartbeatKey, String(Date.now()));
+        await heartbeat();
+        heartbeatTimer = setInterval(() => {
+          void heartbeat().catch((error) => {
+            console.error("[index-lock-heartbeat-error]", { lockKey, owner, error });
+          });
+        }, heartbeatMs);
+      }
       try {
         return await task();
       } finally {
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
         await releaseLock(lockKey, owner).catch((error) => {
           console.error("[index-lock-release-error]", { lockKey, owner, error });
         });
+        if (heartbeatMs) {
+          await storage().delete(heartbeatKey).catch((error) => {
+            console.error("[index-lock-heartbeat-cleanup-error]", { lockKey, owner, error });
+          });
+        }
       }
     }
 
     const firstText = await storage().getText(lockKey);
     const existing = parseLock(firstText);
-    if (!existing || Date.now() - existing.acquiredAt > INDEX_LOCK_STALE_MS) {
+    let lastSeenAt = existing?.acquiredAt ?? 0;
+    if (existing && heartbeatMs) {
+      const heartbeatText = await storage().getText(`${lockKey}.heartbeat.${existing.owner}`);
+      const heartbeatAt = Number(heartbeatText);
+      if (Number.isFinite(heartbeatAt)) lastSeenAt = Math.max(lastSeenAt, heartbeatAt);
+    }
+    if (!existing || Date.now() - lastSeenAt > staleMs) {
       const confirmedText = await storage().getText(lockKey);
       if (confirmedText === firstText) {
         await storage().delete(lockKey);
+        if (existing && heartbeatMs) {
+          await storage().delete(`${lockKey}.heartbeat.${existing.owner}`);
+        }
       }
     }
     await delay(100 + Math.floor(Math.random() * 150));
@@ -144,6 +194,65 @@ export async function getRunnerProfile(username: string): Promise<RunnerProfile 
 
 export async function saveRunnerProfile(username: string, profile: RunnerProfile): Promise<void> {
   await writeJson(runnerProfileKey(username), profile);
+}
+
+export async function getDeepseekSecret(username: string): Promise<EncryptedSecret | null> {
+  return readJson<EncryptedSecret>(deepseekSecretKey(username));
+}
+
+export async function saveDeepseekSecret(username: string, secret: EncryptedSecret): Promise<void> {
+  await writeJson(deepseekSecretKey(username), secret);
+}
+
+export async function deleteDeepseekSecret(username: string): Promise<void> {
+  await storage().delete(deepseekSecretKey(username));
+}
+
+export async function getDeepseekCustomPrompt(username: string): Promise<string> {
+  const preferences = await readJson<{ customPrompt?: unknown }>(deepseekPreferencesKey(username));
+  return typeof preferences?.customPrompt === "string" ? preferences.customPrompt : "";
+}
+
+export async function saveDeepseekCustomPrompt(username: string, customPrompt: string): Promise<void> {
+  await writeJson(deepseekPreferencesKey(username), {
+    customPrompt,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+export async function getAiPrediction(username: string, targetHash: string): Promise<AiPredictionAnalysis | null> {
+  return readJson<AiPredictionAnalysis>(aiPredictionLatestKey(username, targetHash));
+}
+
+export async function saveAiPrediction(
+  username: string,
+  targetHash: string,
+  analysis: AiPredictionAnalysis,
+  snapshot: AiPredictionSnapshot
+): Promise<void> {
+  const historyKey = aiPredictionHistoryKey(username, targetHash);
+  const history = (await readJson<AiPredictionSnapshot[]>(historyKey)) ?? [];
+  const compactHistory = [snapshot, ...history.filter((item) => item.dataFingerprint !== snapshot.dataFingerprint)].slice(0, 50);
+  await Promise.all([
+    writeJson(aiPredictionLatestKey(username, targetHash), analysis),
+    writeJson(historyKey, compactHistory)
+  ]);
+}
+
+export async function getAiDeepAnalysis(username: string, targetHash: string): Promise<AiDeepAnalysis | null> {
+  return readJson<AiDeepAnalysis>(aiDeepAnalysisKey(username, targetHash));
+}
+
+export async function saveAiDeepAnalysis(username: string, targetHash: string, analysis: AiDeepAnalysis): Promise<void> {
+  await writeJson(aiDeepAnalysisKey(username, targetHash), analysis);
+}
+
+export async function withAiPredictionLock<T>(username: string, targetHash: string, task: () => Promise<T>): Promise<T> {
+  return withIndexLock(`${aiPredictionLatestKey(username, targetHash)}.generation`, task, {
+    attempts: 80,
+    staleMs: 10_000,
+    heartbeatMs: 2_000
+  });
 }
 
 export async function listRuns(username: string): Promise<RunningRecord[]> {

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aiPredictionLatestKey } from "../shared/cosKeys";
 import type { RunningRecord, UserProfile } from "../shared/types";
 
 const memory = vi.hoisted(() => new Map<string, string>());
@@ -24,7 +25,7 @@ vi.mock("../netlify/functions/_shared/storage", () => ({
   })
 }));
 
-import { createProfile, listRuns, saveRun } from "../netlify/functions/_shared/data";
+import { createProfile, listRuns, saveRun, withAiPredictionLock } from "../netlify/functions/_shared/data";
 
 function run(id: string, day: number): RunningRecord {
   const timestamp = `2026-07-${String(day).padStart(2, "0")}T08:00:00.000Z`;
@@ -49,6 +50,8 @@ function run(id: string, day: number): RunningRecord {
 
 beforeEach(() => memory.clear());
 
+afterEach(() => vi.useRealTimers());
+
 describe("concurrent COS-style writes", () => {
   it("keeps both runs when two saves update the same index", async () => {
     await Promise.all([saveRun("runner", run("run-a", 1)), saveRun("runner", run("run-b", 2))]);
@@ -65,5 +68,42 @@ describe("concurrent COS-style writes", () => {
     };
     const results = await Promise.all([createProfile(profile), createProfile(profile)]);
     expect(results.sort()).toEqual([false, true]);
+  });
+
+  it("recovers quickly from an AI generation lock left by a terminated function", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T10:00:00.000Z"));
+    const lockKey = `${aiPredictionLatestKey("runner", "target")}.generation.lock`;
+    memory.set(lockKey, JSON.stringify({
+      owner: "terminated-function",
+      acquiredAt: Date.now() - 15_000
+    }));
+
+    const result = withAiPredictionLock("runner", "target", async () => "recovered");
+    await vi.runAllTimersAsync();
+
+    await expect(result).resolves.toBe("recovered");
+  });
+
+  it("does not steal a live AI generation lock while its heartbeat is active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T10:00:00.000Z"));
+    let finishFirst: (() => void) | undefined;
+    let secondStarted = false;
+    const first = withAiPredictionLock("runner", "target", () => new Promise<string>((resolve) => {
+      finishFirst = () => resolve("first");
+    }));
+    await vi.advanceTimersByTimeAsync(95_000);
+
+    const second = withAiPredictionLock("runner", "target", async () => {
+      secondStarted = true;
+      return "second";
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(secondStarted).toBe(false);
+
+    finishFirst?.();
+    await vi.runAllTimersAsync();
+    await expect(Promise.all([first, second])).resolves.toEqual(["first", "second"]);
   });
 });

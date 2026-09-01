@@ -1,4 +1,14 @@
-import type { PredictionResult, PublicUser, RunnerProfile, RunningRecord, RunningShoe, WeightRecord } from "@shared/types";
+import type {
+  AiDeepAnalysis,
+  AiPredictionAnalysis,
+  DeepseekKeyStatus,
+  PredictionResult,
+  PublicUser,
+  RunnerProfile,
+  RunningRecord,
+  RunningShoe,
+  WeightRecord
+} from "@shared/types";
 import { buildPrediction } from "@shared/predictions";
 
 type LocalUser = PublicUser & {
@@ -175,6 +185,12 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
   if (url.pathname === "/api/runner-profile" && method === "GET") {
     return { profile: state.runnerProfilesByUser[username] } as T;
   }
+  if (url.pathname === "/api/ai-settings/deepseek" && method === "GET") {
+    return { deepseek: { configured: false, maskedKey: null, updatedAt: null, customPrompt: "" } } as T;
+  }
+  if (url.pathname === "/api/ai-settings/deepseek" || url.pathname === "/api/ai-prediction") {
+    throw new Error("DeepSeek 智能服务需要通过 npm run netlify:dev 启动，纯 Vite 预览不会保存 API Key。");
+  }
   if (url.pathname === "/api/runner-profile" && method === "PUT") {
     const now = new Date().toISOString();
     const existing = state.runnerProfilesByUser[username];
@@ -190,6 +206,10 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
         Number.isFinite(Number(jsonBody.measuredMaxHeartRateBpm)) && jsonBody.measuredMaxHeartRateBpm !== null && jsonBody.measuredMaxHeartRateBpm !== ""
           ? Number(jsonBody.measuredMaxHeartRateBpm)
           : null,
+      predictionTarget:
+        jsonBody.predictionTarget && typeof jsonBody.predictionTarget === "object"
+          ? jsonBody.predictionTarget as RunnerProfile["predictionTarget"]
+          : existing?.predictionTarget ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now
     };
@@ -348,17 +368,40 @@ function loadImageFromFile(file: File): Promise<HTMLImageElement> {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  if (isLocalPreviewHost() && path.startsWith("/api/")) {
+  const localPreview = isLocalPreviewHost();
+  const localAiServerRequest = localPreview && (path === "/api/ai-settings/deepseek" || path === "/api/ai-prediction");
+  if (localPreview && path.startsWith("/api/") && !localAiServerRequest) {
     return localPreviewRequest<T>(path, init);
+  }
+  let effectiveInit = init;
+  if (localAiServerRequest) {
+    const state = readLocalState();
+    const username = requireLocalUsername(state);
+    let body = init.body;
+    if (path === "/api/ai-prediction" && typeof body === "string") {
+      body = JSON.stringify({
+        ...JSON.parse(body),
+        localPreviewData: {
+          runs: state.runsByUser[username] ?? [],
+          weights: state.weightsByUser[username] ?? [],
+          profile: state.runnerProfilesByUser[username] ?? null
+        }
+      });
+    }
+    effectiveInit = {
+      ...init,
+      body,
+      headers: { ...(init.headers ?? {}), "X-Local-Preview-User": username }
+    };
   }
   let response: Response;
   try {
     response = await fetch(path, {
-      ...init,
+      ...effectiveInit,
       credentials: "include",
       headers: {
-        ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
-        ...(init.headers ?? {})
+        ...(effectiveInit.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+        ...(effectiveInit.headers ?? {})
       }
     });
   } catch (error) {
@@ -387,6 +430,13 @@ export const api = {
   getRunnerProfile: () => request<{ profile: RunnerProfile | null }>("/api/runner-profile"),
   saveRunnerProfile: (profile: RunnerProfile) =>
     request<{ profile: RunnerProfile }>("/api/runner-profile", { method: "PUT", body: JSON.stringify(profile) }),
+  getDeepseekSettings: () => request<{ deepseek: DeepseekKeyStatus }>("/api/ai-settings/deepseek"),
+  saveDeepseekKey: (apiKey: string) =>
+    request<{ deepseek: DeepseekKeyStatus }>("/api/ai-settings/deepseek", { method: "PUT", body: JSON.stringify({ apiKey }) }),
+  saveDeepseekPrompt: (customPrompt: string) =>
+    request<{ deepseek: DeepseekKeyStatus }>("/api/ai-settings/deepseek", { method: "PATCH", body: JSON.stringify({ customPrompt }) }),
+  deleteDeepseekKey: () =>
+    request<{ deepseek: DeepseekKeyStatus }>("/api/ai-settings/deepseek", { method: "DELETE" }),
   listRuns: () => request<{ runs: RunningRecord[] }>("/api/runs"),
   createRun: (run: RunningRecord) => request<{ run: RunningRecord }>("/api/runs", { method: "POST", body: JSON.stringify(run) }),
   updateRun: (run: RunningRecord) =>
@@ -422,5 +472,19 @@ export const api = {
       searchParams.set("targetDate", params.targetDate);
     }
     return request<{ prediction: PredictionResult }>(`/api/predictions?${searchParams.toString()}`);
-  }
+  },
+  aiPrediction: (params: {
+    kind: "current" | "standard" | "deep";
+    targetDistanceKm: number;
+    targetFinishSec?: number | null;
+    targetDate?: string | null;
+    force?: boolean;
+  }) => request<{
+    analysis: AiPredictionAnalysis | AiDeepAnalysis;
+    standard?: AiPredictionAnalysis;
+    proCacheStatus?: "restored" | "missing" | "outdated" | "target-date-passed" | "target-date-required";
+  }>("/api/ai-prediction", {
+    method: "POST",
+    body: JSON.stringify(params)
+  })
 };

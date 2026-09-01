@@ -11,6 +11,8 @@ npm run netlify:dev
 
 如果没有配置 COS 环境变量，Netlify Functions 会在本地使用 `.netlify/local-data/` 作为开发回退存储。生产环境必须在 Netlify Site settings 中配置 `.env.example` 里的变量。
 
+DeepSeek 智能分析使用“用户自带 API Key”模式。`npm run dev` 会在本地把 AI 函数桥接到 Vite，并将加密后的 Key 与分析缓存写入未提交的 `.netlify/local-data/`；如果已安装 Netlify CLI，也可使用 `npm run netlify:dev`。本地开发不会把 Key 写进浏览器或线上环境。Key 以 AES-256-GCM 加密，密钥通过 HKDF 从 `JWT_SECRET` 派生。修改生产环境的 `JWT_SECRET` 会使已经保存的 DeepSeek Key 无法解密，修改前应安排迁移或让用户重新配置。
+
 ## Deploy
 
 1. 将仓库推送到 `https://github.com/FISHZBLBL/running-platform`。

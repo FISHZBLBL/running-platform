@@ -1,4 +1,4 @@
-import type { RunnerProfile, RunnerSex, RunningRecord, RunningShoe, RunSplit, Weather, WeightRecord } from "./types";
+import type { PredictionMode, PredictionTargetConfig, RunnerProfile, RunnerSex, RunningRecord, RunningShoe, RunSplit, Weather, WeightRecord } from "./types";
 import { calendarDateFromDateTime } from "./runDates";
 
 export class ValidationError extends Error {
@@ -181,9 +181,32 @@ export function validateRunnerProfilePayload(input: unknown, existing?: RunnerPr
     heightCm: boundedNullableNumber(payload.heightCm, "heightCm", 100, 250),
     restingHeartRateBpm: boundedNullableNumber(payload.restingHeartRateBpm, "restingHeartRateBpm", 30, 120),
     measuredMaxHeartRateBpm: boundedNullableNumber(payload.measuredMaxHeartRateBpm, "measuredMaxHeartRateBpm", 100, 240),
+    predictionTarget: validatePredictionTarget(payload.predictionTarget, existing?.predictionTarget ?? null),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
+}
+
+function validatePredictionTarget(value: unknown, fallback: PredictionTargetConfig | null): PredictionTargetConfig | null {
+  if (value === undefined) return fallback;
+  if (value === null) return null;
+  if (!value || typeof value !== "object") throw new ValidationError("predictionTarget must be an object or null.");
+  const target = value as Partial<PredictionTargetConfig>;
+  const mode = target.mode;
+  if (mode !== "distance-date" && mode !== "finish-date" && mode !== "date-finish") {
+    throw new ValidationError("predictionTarget.mode is invalid.");
+  }
+  const targetDistanceKm = finiteNumber(target.targetDistanceKm, "predictionTarget.targetDistanceKm", 0.1);
+  if (targetDistanceKm > 200) throw new ValidationError("predictionTarget.targetDistanceKm must be 200 or fewer.");
+  const targetFinishSec = target.targetFinishSec === null || target.targetFinishSec === undefined
+    ? null
+    : finiteNumber(target.targetFinishSec, "predictionTarget.targetFinishSec", 1);
+  const targetDate = target.targetDate === null || target.targetDate === undefined
+    ? null
+    : optionalDate(target.targetDate, "predictionTarget.targetDate");
+  if (mode === "finish-date" && targetFinishSec === null) throw new ValidationError("predictionTarget.targetFinishSec is required.");
+  if (mode === "date-finish" && targetDate === null) throw new ValidationError("predictionTarget.targetDate is required.");
+  return { mode: mode as PredictionMode, targetDistanceKm, targetFinishSec, targetDate };
 }
 
 export function validateShoePayload(input: unknown, existing?: RunningShoe): RunningShoe {

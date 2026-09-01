@@ -20,6 +20,26 @@ export function runnerProfileKey(username: string): string {
   return `${userPrefix(username)}runner-profile.json`;
 }
 
+export function deepseekSecretKey(username: string): string {
+  return `${userPrefix(username)}secrets/deepseek.json`;
+}
+
+export function deepseekPreferencesKey(username: string): string {
+  return `${userPrefix(username)}ai/deepseek-preferences.json`;
+}
+
+export function aiPredictionLatestKey(username: string, targetHash: string): string {
+  return `${userPrefix(username)}ai/predictions/${targetHash}/latest.json`;
+}
+
+export function aiPredictionHistoryKey(username: string, targetHash: string): string {
+  return `${userPrefix(username)}ai/predictions/${targetHash}/history.json`;
+}
+
+export function aiDeepAnalysisKey(username: string, targetHash: string): string {
+  return `${userPrefix(username)}ai/predictions/${targetHash}/deep.json`;
+}
+
 export function keepKey(username: string): string {
   return `${userPrefix(username)}.keep`;
 }

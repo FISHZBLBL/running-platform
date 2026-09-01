@@ -437,7 +437,7 @@ export function storage(): StorageAdapter {
   if (!adapter) {
     const missing = ["COS_SECRET_ID", "COS_SECRET_KEY"].filter((name) => !getEnv(name));
     const hasCosSecrets = missing.length === 0;
-    if (!hasCosSecrets && (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime())) {
+    if (!hasCosSecrets && getEnv("NETLIFY_DEV") !== "true" && (getEnv("CONTEXT") === "production" || isCloudFunctionRuntime())) {
       throw new Error(
         `腾讯 COS 环境变量缺失：${missing.join(", ")}。请在 Netlify Site configuration -> Environment variables 中配置后重新部署。`
       );
