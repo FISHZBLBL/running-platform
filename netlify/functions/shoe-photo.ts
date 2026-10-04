@@ -1,5 +1,5 @@
 import type { Config } from "@netlify/functions";
-import { shoePhotoKey, shoesPrefix } from "../../shared/cosKeys";
+import { isUserShoePhotoKey, shoePhotoKey, validateObjectId } from "../../shared/cosKeys";
 import { requireUsername } from "./_shared/auth";
 import { errorResponse, json, methodNotAllowed } from "./_shared/responses";
 import { storage } from "./_shared/storage";
@@ -11,10 +11,6 @@ function extensionFromName(name: string): string {
 
 function shoePhotoUrl(key: string): string {
   return `/api/shoe-photo?key=${encodeURIComponent(key)}`;
-}
-
-function isUserShoePhotoKey(username: string, key: string): boolean {
-  return key.startsWith(shoesPrefix(username)) && key.includes("/photos/");
 }
 
 export default async function shoePhoto(req: Request): Promise<Response> {
@@ -44,6 +40,7 @@ export default async function shoePhoto(req: Request): Promise<Response> {
     if (!shoeId) {
       return json({ error: "shoeId is required before uploading a shoe photo." }, { status: 400 });
     }
+    validateObjectId(shoeId, "shoeId");
     if (!(file instanceof File) || !file.type.startsWith("image/")) {
       return json({ error: "A shoe photo image file is required." }, { status: 400 });
     }

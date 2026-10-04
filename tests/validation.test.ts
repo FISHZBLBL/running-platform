@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { keepKey, profileKey, runKey, runnerProfileKey, screenshotKey, shoeKey, shoePhotoKey, weightKey } from "../shared/cosKeys";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { isUserShoePhotoKey, keepKey, profileKey, runKey, runnerProfileKey, screenshotKey, shoeKey, shoePhotoKey, weightKey } from "../shared/cosKeys";
 import { validateRunPayload, validateRunnerProfilePayload, validateShoePayload, validateWeightPayload } from "../shared/validation";
+
+afterEach(() => vi.useRealTimers());
 
 describe("cos key helpers", () => {
   it("generates stable user scoped keys", () => {
@@ -12,6 +14,26 @@ describe("cos key helpers", () => {
     expect(shoePhotoKey("fish", "shoe-1", "photo-1", ".JPG")).toBe("users/fish/shoes/shoe-1/photos/photo-1.jpg");
     expect(weightKey("fish", "2026-01-01")).toBe("users/fish/weights/2026-01-01.json");
     expect(screenshotKey("fish", "run-1", "file-1", ".PNG")).toBe("users/fish/runs/run-1/screenshots/file-1.png");
+  });
+
+  it.each(["../../victim/profile", "..", "../outside", "run/id", "run\\id", "%2e%2e", "", "x".repeat(129)])("rejects unsafe object ids: %s", (id) => {
+    expect(() => runKey("fish", id)).toThrow();
+    expect(() => shoeKey("fish", id)).toThrow();
+    expect(() => screenshotKey("fish", id, "photo-1", "png")).toThrow();
+    expect(() => shoePhotoKey("fish", "shoe-1", id, "jpg")).toThrow();
+  });
+
+  it("rejects traversal and cross-account photo keys while accepting normal photos", () => {
+    expect(isUserShoePhotoKey("fish", "users/fish/shoes/shoe-1/photos/a.jpg", "shoe-1")).toBe(true);
+    for (const key of [
+      "users/other/shoes/shoe-1/photos/a.jpg",
+      "users/fish/shoes/x/photos/../../../../other/profile.json",
+      "users/fish/shoes/shoe-1/photos/%2e%2e.jpg",
+      "users/fish/shoes/shoe-2/photos/a.jpg",
+      "users/fish/shoes/shoe-1/photos/a.jpg/extra"
+    ]) expect(isUserShoePhotoKey("fish", key, "shoe-1")).toBe(false);
+    expect(() => profileKey("../fish")).toThrow();
+    expect(() => weightKey("fish", "2026-02-30")).toThrow();
   });
 });
 
@@ -115,6 +137,43 @@ describe("validation", () => {
     expect(profile.measuredMaxHeartRateBpm).toBe(192);
   });
 
+  it("saves a future race date while still rejecting a future birth date", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T12:00:00Z"));
+    const predictionTarget = {
+      mode: "date-finish",
+      targetDistanceKm: 21.0975,
+      targetFinishSec: null,
+      targetDate: "2026-09-26"
+    };
+
+    expect(validateRunnerProfilePayload({ predictionTarget }).predictionTarget).toEqual(predictionTarget);
+    expect(() => validateRunnerProfilePayload({ birthDate: "2026-09-26" })).toThrow(/not in the future/);
+  });
+
+  it.each(["2027-02-29", "2026-02-30", "2026-13-01", "2026/09/26"])(
+    "rejects an invalid target calendar date: %s",
+    (targetDate) => {
+      expect(() => validateRunnerProfilePayload({ predictionTarget: {
+        mode: "date-finish", targetDistanceKm: 21.0975, targetFinishSec: null, targetDate
+      } })).toThrow(/predictionTarget.targetDate/);
+    }
+  );
+
+  it("accepts a valid future leap day", () => {
+    const predictionTarget = {
+      mode: "date-finish", targetDistanceKm: 21.0975, targetFinishSec: null, targetDate: "2028-02-29"
+    };
+    expect(validateRunnerProfilePayload({ predictionTarget }).predictionTarget?.targetDate).toBe("2028-02-29");
+  });
+
+  it("accepts today's birth date during the early morning in Shanghai", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-03T16:30:00Z"));
+    expect(validateRunnerProfilePayload({ birthDate: "2026-10-04" }).birthDate).toBe("2026-10-04");
+    expect(() => validateRunnerProfilePayload({ birthDate: "2026-10-05" })).toThrow(/not in the future/);
+  });
+
   it("normalizes a running shoe payload", () => {
     const shoe = validateShoePayload({
       id: "shoe-1",
@@ -128,5 +187,28 @@ describe("validation", () => {
 
   it("rejects invalid weight dates", () => {
     expect(() => validateWeightPayload({ date: "2026/01/01", weightKg: 70 })).toThrow(/YYYY-MM-DD/);
+  });
+
+  it.each(["2026-02-30", "2027-02-29", "2026-13-01", "2026-00-01", "2026-04-31"])("rejects nonexistent weight and run dates: %s", (date) => {
+    expect(() => validateWeightPayload({ date, weightKg: 70 })).toThrow(/calendar date/);
+    const run = {
+      id: "run-date-test", dateTime: "2026-10-01T08:00:00Z", distanceKm: 5, durationSec: 1800,
+      avgPowerW: 200, avgCadenceSpm: 170, avgHeartRateBpm: 150
+    };
+    expect(() => validateRunPayload({ ...run, localDate: date })).toThrow(/localDate/);
+    expect(() => validateRunPayload({ ...run, dateTime: `${date}T08:00:00Z` })).toThrow(/dateTime/);
+  });
+
+  it("accepts real leap dates and enforces media ownership for backend payloads", () => {
+    expect(validateWeightPayload({ date: "2028-02-29", weightKg: 70 }).date).toBe("2028-02-29");
+    const run = {
+      id: "run-media", dateTime: "2028-02-29T08:00:00+08:00", localDate: "2028-02-29",
+      distanceKm: 5, durationSec: 1800, avgPowerW: 200, avgCadenceSpm: 170, avgHeartRateBpm: 150,
+      screenshotKeys: ["users/fish/runs/run-media/screenshots/photo-1.png"]
+    };
+    expect(validateRunPayload(run, undefined, "fish").screenshotKeys).toEqual(run.screenshotKeys);
+    expect(() => validateRunPayload({ ...run, id: "../victim/profile" })).toThrow();
+    expect(() => validateRunPayload({ ...run, screenshotKeys: ["users/other/runs/run-media/screenshots/photo-1.png"] }, undefined, "fish")).toThrow(/screenshotKeys/);
+    expect(() => validateShoePayload({ id: "shoe-1", name: "Shoe", photoKey: "users/other/shoes/shoe-1/photos/photo-1.jpg" }, undefined, "fish")).toThrow(/photoKey/);
   });
 });

@@ -11,7 +11,7 @@ export default async function runs(req: Request): Promise<Response> {
       return json({ runs: await listRuns(username) });
     }
     if (req.method === "POST") {
-      const run = validateRunPayload(await parseJson(req));
+      const run = validateRunPayload(await parseJson(req), undefined, username);
       await saveRun(username, run);
       return json({ run }, { status: 201 });
     }

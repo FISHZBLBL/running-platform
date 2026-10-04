@@ -735,6 +735,41 @@ input[type="datetime-local"] {
   padding: 9px 11px;
 }
 
+.data-load-error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid #fecdd3;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #9f1239;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.data-load-error > div {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+.data-load-error p {
+  margin: 6px 0;
+}
+
+.data-load-error ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.data-load-error button {
+  flex-shrink: 0;
+  min-height: 44px;
+}
+
 .panel {
   padding: 16px;
 }

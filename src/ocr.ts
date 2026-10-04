@@ -308,17 +308,89 @@ function addSplitCandidate(
   candidates.set(index, fields);
 }
 
+function rankSplitCandidateValues(values: Map<string, SplitCandidate>): Array<[string, SplitCandidate]> {
+  return [...values.entries()].sort((left, right) => {
+    const countDifference = right[1].count - left[1].count;
+    return countDifference || left[1].firstSeen - right[1].firstSeen;
+  });
+}
+
+function resolveHeartRateSequence(candidates: SplitCandidateMap): Map<number, string> {
+  const rows = [...candidates.entries()]
+    .map(([index, fields]) => {
+      const ranked = rankSplitCandidateValues(fields.get("heartRateBpm") ?? new Map());
+      if (ranked.length === 0) return null;
+      const highestCount = ranked[0][1].count;
+      return {
+        index,
+        // 多数票仍然优先；只有最高票数相同时，才使用相邻分段连续性打破平局。
+        options: ranked.filter(([, candidate]) => candidate.count === highestCount)
+      };
+    })
+    .filter((row): row is { index: number; options: Array<[string, SplitCandidate]> } => row !== null)
+    .sort((left, right) => left.index - right.index);
+
+  if (rows.length === 0) return new Map();
+
+  type SequenceState = { cost: number; previousOption: number | null };
+  const states: SequenceState[][] = [];
+
+  rows.forEach((row, rowPosition) => {
+    const rowStates = row.options.map(([value, candidate], optionPosition): SequenceState => {
+      const deterministicTieBreak = candidate.firstSeen * 1e-6;
+      if (rowPosition === 0) {
+        return { cost: deterministicTieBreak, previousOption: null };
+      }
+
+      const previousRow = rows[rowPosition - 1];
+      const indexGap = Math.max(1, row.index - previousRow.index);
+      let bestCost = Number.POSITIVE_INFINITY;
+      let bestPreviousOption = 0;
+      previousRow.options.forEach(([previousValue], previousOptionPosition) => {
+        const changePerSplit = Math.abs(Number(value) - Number(previousValue)) / indexGap;
+        const transitionCost = states[rowPosition - 1][previousOptionPosition].cost + changePerSplit;
+        if (transitionCost < bestCost) {
+          bestCost = transitionCost;
+          bestPreviousOption = previousOptionPosition;
+        }
+      });
+      return {
+        cost: bestCost + deterministicTieBreak + optionPosition * 1e-9,
+        previousOption: bestPreviousOption
+      };
+    });
+    states.push(rowStates);
+  });
+
+  const selected = new Map<number, string>();
+  let selectedOption = states[states.length - 1].reduce(
+    (best, state, index) => state.cost < states[states.length - 1][best].cost ? index : best,
+    0
+  );
+  for (let rowPosition = rows.length - 1; rowPosition >= 0; rowPosition -= 1) {
+    selected.set(rows[rowPosition].index, rows[rowPosition].options[selectedOption][0]);
+    selectedOption = states[rowPosition][selectedOption].previousOption ?? 0;
+  }
+
+  return selected;
+}
+
 function resolveSplitCandidates(candidates: SplitCandidateMap): SplitRowExtraction {
   const splits = new Map<number, SplitDraft>();
   const ambiguousFields: SplitOcrAmbiguity[] = [];
+  const preferredHeartRates = resolveHeartRateSequence(candidates);
 
   for (const [index, fields] of candidates) {
     const split = { ...emptySplit };
     for (const [field, values] of fields) {
-      const ranked = [...values.entries()].sort((left, right) => {
-        const countDifference = right[1].count - left[1].count;
-        return countDifference || left[1].firstSeen - right[1].firstSeen;
-      });
+      const ranked = rankSplitCandidateValues(values);
+      const preferredValue = field === "heartRateBpm" ? preferredHeartRates.get(index) : undefined;
+      if (preferredValue && ranked[0][0] !== preferredValue) {
+        const preferredPosition = ranked.findIndex(([value]) => value === preferredValue);
+        if (preferredPosition >= 0) {
+          ranked.unshift(...ranked.splice(preferredPosition, 1));
+        }
+      }
       split[field] = ranked[0][0];
       if (ranked.length > 1) {
         ambiguousFields.push({

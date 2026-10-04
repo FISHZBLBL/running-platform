@@ -118,6 +118,42 @@ describe("Apple Watch overview OCR parsing", () => {
 });
 
 describe("Apple Watch split screenshot merging", () => {
+  it("prefers the continuous heart-rate sequence when 182 and 184 are OCRed as 132 and 134", () => {
+    const text = `
+      单段 1.00公里
+      时间 配速 心率
+      1 06:18 6'18"/公里 161次/分
+      2 06:38 6'38"/公里 172次/分
+      3 06:22 6'22"/公里 132次/分
+      4 06:25 6'25"/公里 134次/分
+      5 06:13 6'13"/公里 185次/分
+      6 00:07 6'11"/公里 186次/分
+      单段 1.00公里
+      心率 功率 步频
+      1 161次/分 238瓦 175步/分
+      2 172次/分 227瓦 174步/分
+      3 182次/分 237瓦 173步/分
+      4 184次/分 235瓦 171步/分
+      5 185次/分 243瓦 171步/分
+      6 186次/分 251瓦 148步/分
+    `;
+
+    const result = extractSplitsFromText(text, 5);
+
+    expect(result.splits.slice(0, 5).map((split) => split.heartRateBpm)).toEqual(["161", "172", "182", "184", "185"]);
+    expect(result.ambiguousFields).toContainEqual({
+      index: 3,
+      field: "heartRateBpm",
+      candidates: ["182", "132"]
+    });
+    expect(result.ambiguousFields).toContainEqual({
+      index: 4,
+      field: "heartRateBpm",
+      candidates: ["184", "134"]
+    });
+    expect(result.tailDuration).toBe("00:07");
+  });
+
   it("keeps the fifth full split when an Apple Watch side-arrow is OCRed before its row number", () => {
     const text = `
       单段 1.00公里

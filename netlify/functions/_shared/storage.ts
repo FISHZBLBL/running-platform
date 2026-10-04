@@ -2,6 +2,7 @@ import type { Dirent } from "node:fs";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash, createHmac } from "node:crypto";
 import path from "node:path";
+import { StorageKeyError, validateStorageKey } from "../../../shared/cosKeys";
 import { getEnv, isCloudFunctionRuntime } from "./env";
 
 export type StoredFile = {
@@ -83,6 +84,7 @@ class CosStorage implements StorageAdapter {
   }
 
   async list(prefix: string): Promise<string[]> {
+    validateStorageKey(prefix, { prefix: true });
     const keys: string[] = [];
     let marker: string | undefined;
     do {
@@ -118,6 +120,11 @@ class CosStorage implements StorageAdapter {
     payload?: { body: Buffer; contentType: string; headers?: Record<string, string> },
     query: Record<string, string> = {}
   ): Promise<Response> {
+    if (key) {
+      validateStorageKey(key);
+    } else if (method !== "GET" || !Object.prototype.hasOwnProperty.call(query, "prefix")) {
+      throw new StorageKeyError("Storage key is required.");
+    }
     const host = this.requestHost;
     const pathname = key ? `/${encodeCosPath(key)}` : "/";
     const searchParams = new URLSearchParams();
@@ -349,25 +356,33 @@ function contentTypeFromKey(key: string): string {
   return "image/jpeg";
 }
 
-class LocalStorage implements StorageAdapter {
-  private root = path.join(process.cwd(), ".netlify", "local-data");
+export class LocalStorage implements StorageAdapter {
+  private root: string;
+
+  constructor(root = path.join(process.cwd(), ".netlify", "local-data")) {
+    this.root = path.resolve(root);
+  }
 
   async getText(key: string): Promise<string | null> {
+    const filePath = this.resolve(key);
     try {
-      return await readFile(this.resolve(key), "utf8");
-    } catch {
-      return null;
+      return await readFile(filePath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   }
 
   async getFile(key: string): Promise<StoredFile | null> {
+    const filePath = this.resolve(key);
     try {
       return {
-        body: await readFile(this.resolve(key)),
+        body: await readFile(filePath),
         contentType: contentTypeFromKey(key)
       };
-    } catch {
-      return null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
     }
   }
 
@@ -402,22 +417,29 @@ class LocalStorage implements StorageAdapter {
   }
 
   async list(prefix: string): Promise<string[]> {
-    const directory = this.resolve(prefix);
+    const directory = this.resolve(prefix, true);
     const keys: string[] = [];
     await this.walk(directory, prefix, keys);
     return keys;
   }
 
-  private resolve(key: string): string {
-    return path.join(this.root, key);
+  private resolve(key: string, prefix = false): string {
+    validateStorageKey(key, { prefix });
+    const filePath = path.resolve(this.root, key);
+    const relative = path.relative(this.root, filePath);
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+      throw new StorageKeyError("Storage key must remain inside the local data directory.");
+    }
+    return filePath;
   }
 
   private async walk(directory: string, prefix: string, keys: string[]): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await readdir(directory, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
     for (const entry of entries) {
       const relativeKey = `${prefix}${entry.name}`;

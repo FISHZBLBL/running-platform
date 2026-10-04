@@ -3,6 +3,7 @@ import type {
   AiPredictionAnalysis,
   DeepseekKeyStatus,
   PredictionResult,
+  PredictionTargetConfig,
   PublicUser,
   RunnerProfile,
   RunningRecord,
@@ -10,6 +11,7 @@ import type {
   WeightRecord
 } from "@shared/types";
 import { buildPrediction } from "@shared/predictions";
+import { validatePredictionTargetPatch, validateWeightPayload } from "@shared/validation";
 
 type LocalUser = PublicUser & {
   password: string;
@@ -185,6 +187,13 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
   if (url.pathname === "/api/runner-profile" && method === "GET") {
     return { profile: state.runnerProfilesByUser[username] } as T;
   }
+  if (url.pathname === "/api/runner-profile" && method === "PATCH") {
+    const existing = state.runnerProfilesByUser[username];
+    const profile = validatePredictionTargetPatch(jsonBody, existing ?? undefined);
+    state.runnerProfilesByUser[username] = profile;
+    writeLocalState(state);
+    return { profile } as T;
+  }
   if (url.pathname === "/api/ai-settings/deepseek" && method === "GET") {
     return { deepseek: { configured: false, maskedKey: null, updatedAt: null, customPrompt: "" } } as T;
   }
@@ -291,15 +300,14 @@ async function localPreviewRequest<T>(path: string, init: RequestInit = {}): Pro
     return { weights: [...state.weightsByUser[username]].sort((a, b) => b.date.localeCompare(a.date)) } as T;
   }
   if (url.pathname === "/api/weights" && method === "POST") {
-    const now = new Date().toISOString();
-    const existing = state.weightsByUser[username].find((item) => item.date === jsonBody.date);
-    const weight: WeightRecord = {
-      date: String(jsonBody.date),
-      weightKg: Number(jsonBody.weightKg),
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now
-    };
-    state.weightsByUser[username] = [weight, ...state.weightsByUser[username].filter((item) => item.date !== weight.date)];
+    const previousDate = typeof jsonBody.previousDate === "string" ? jsonBody.previousDate : null;
+    const existing = previousDate ? state.weightsByUser[username].find((item) => item.date === previousDate) : undefined;
+    const weight = validateWeightPayload(jsonBody, existing);
+    if (previousDate && !existing) throw new Error("原体重记录不存在，请刷新后重试。");
+    if (state.weightsByUser[username].some((item) => item.date === weight.date && item.date !== previousDate)) {
+      throw new Error("该日期已有体重记录，请编辑该条记录，或选择其他日期。");
+    }
+    state.weightsByUser[username] = [weight, ...state.weightsByUser[username].filter((item) => item.date !== weight.date && item.date !== previousDate)];
     writeLocalState(state);
     return { weight } as T;
   }
@@ -454,7 +462,9 @@ export const api = {
     return request<{ key: string; url: string | null }>("/api/shoe-photo", { method: "POST", body: form });
   },
   listWeights: () => request<{ weights: WeightRecord[] }>("/api/weights"),
-  saveWeight: (weight: Pick<WeightRecord, "date" | "weightKg">) =>
+  savePredictionTarget: (target: PredictionTargetConfig) =>
+    request<{ profile: RunnerProfile }>("/api/runner-profile", { method: "PATCH", body: JSON.stringify({ predictionTarget: target }) }),
+  saveWeight: (weight: Pick<WeightRecord, "date" | "weightKg"> & { previousDate?: string }) =>
     request<{ weight: WeightRecord }>("/api/weights", { method: "POST", body: JSON.stringify(weight) }),
   deleteWeight: (date: string) => request<{ ok: boolean }>(`/api/weights?date=${encodeURIComponent(date)}`, { method: "DELETE" }),
   uploadScreenshots: (runId: string, files: File[]) => {

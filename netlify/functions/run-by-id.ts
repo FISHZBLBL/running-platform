@@ -19,7 +19,7 @@ export default async function runById(req: Request, context: { params?: { id?: s
       const existing = await getRun(username, runId);
       const body = await parseJson(req);
       const payload = typeof body === "object" && body !== null ? body : {};
-      const run = validateRunPayload({ ...payload, id: runId }, existing ?? undefined);
+      const run = validateRunPayload({ ...payload, id: runId }, existing ?? undefined, username);
       await saveRun(username, run);
       return json({ run });
     }

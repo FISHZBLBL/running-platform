@@ -1,5 +1,7 @@
 import type { PredictionMode, PredictionTargetConfig, RunnerProfile, RunnerSex, RunningRecord, RunningShoe, RunSplit, Weather, WeightRecord } from "./types";
 import { calendarDateFromDateTime } from "./runDates";
+import { isCalendarDate } from "./calendarDates";
+import { isUserScreenshotKey, isUserShoePhotoKey, validateObjectId } from "./cosKeys";
 
 export class ValidationError extends Error {
   status = 400;
@@ -57,28 +59,32 @@ function optionalString(value: unknown, label: string): string | null {
 
 function validateDateTime(value: unknown): string {
   const text = stringValue(value, "dateTime");
+  const parts = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?$/);
   const date = new Date(text);
-  if (Number.isNaN(date.getTime())) {
+  if (!parts || !isCalendarDate(parts[1]) || Number(parts[2]) > 23 || Number(parts[3]) > 59 || Number(parts[4] ?? 0) > 59 || Number.isNaN(date.getTime())) {
     throw new ValidationError("dateTime must be a valid date.");
   }
   return text;
 }
 
-function validateDate(value: unknown): string {
-  const text = stringValue(value, "date");
+function validateDate(value: unknown, label = "date"): string {
+  const text = stringValue(value, label);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    throw new ValidationError("date must use YYYY-MM-DD.");
+    throw new ValidationError(`${label} must use YYYY-MM-DD.`);
   }
+  if (!isCalendarDate(text)) throw new ValidationError(`${label} must be a valid calendar date.`);
   return text;
 }
 
-function optionalDate(value: unknown, label: string): string | null {
+function optionalDate(value: unknown, label: string, { allowFuture = false } = {}): string | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new ValidationError(`${label} must use YYYY-MM-DD.`);
   }
-  const date = new Date(`${value}T00:00:00Z`);
-  if (Number.isNaN(date.getTime()) || date.getTime() > Date.now()) {
+  if (!isCalendarDate(value)) {
+    throw new ValidationError(`${label} must be a valid calendar date.`);
+  }
+  if (!allowFuture && value > calendarDateFromDateTime(new Date().toISOString())) {
     throw new ValidationError(`${label} must be a valid date that is not in the future.`);
   }
   return value;
@@ -126,7 +132,7 @@ function validateSplit(input: unknown, fallbackIndex: number): RunSplit {
   };
 }
 
-export function validateRunPayload(input: unknown, existing?: RunningRecord): RunningRecord {
+export function validateRunPayload(input: unknown, existing?: RunningRecord, username?: string): RunningRecord {
   const payload = input as Partial<RunningRecord>;
   const provided = (key: keyof RunningRecord) => Object.prototype.hasOwnProperty.call(payload, key);
   const now = new Date().toISOString();
@@ -146,13 +152,20 @@ export function validateRunPayload(input: unknown, existing?: RunningRecord): Ru
   }
   const dateTime = validateDateTime(payload.dateTime);
   const requestedLocalDate = provided("localDate") ? payload.localDate : existing?.localDate;
-  const localDate = requestedLocalDate ? validateDate(requestedLocalDate) : calendarDateFromDateTime(dateTime);
+  const localDate = requestedLocalDate ? validateDate(requestedLocalDate, "localDate") : calendarDateFromDateTime(dateTime);
+  const id = validateObjectId(stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"));
+  const screenshotKeys = Array.isArray(payload.screenshotKeys) ? payload.screenshotKeys.filter((key) => typeof key === "string") : [];
+  if (username && screenshotKeys.some((key) => !isUserScreenshotKey(username, id, key))) {
+    throw new ValidationError("screenshotKeys must belong to this user's run.");
+  }
+  const shoeId = optionalString(payload.shoeId, "shoeId");
+  if (shoeId) validateObjectId(shoeId, "shoeId");
 
   return {
-    id: stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"),
+    id,
     dateTime,
     localDate,
-    shoeId: optionalString(payload.shoeId, "shoeId"),
+    shoeId,
     distanceKm,
     durationSec,
     avgPaceSecPerKm,
@@ -166,7 +179,7 @@ export function validateRunPayload(input: unknown, existing?: RunningRecord): Ru
     weather: validateWeather(payload.weather),
     notes: optionalText(payload.notes, "notes"),
     splits: Array.isArray(payload.splits) ? payload.splits.map(validateSplit) : [],
-    screenshotKeys: Array.isArray(payload.screenshotKeys) ? payload.screenshotKeys.filter((key) => typeof key === "string") : [],
+    screenshotKeys,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now
   };
@@ -187,6 +200,22 @@ export function validateRunnerProfilePayload(input: unknown, existing?: RunnerPr
   };
 }
 
+export function validatePredictionTargetPatch(input: unknown, existing?: RunnerProfile): RunnerProfile {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new ValidationError("Prediction target patch must be an object.");
+  }
+  const payload = input as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(payload, "predictionTarget") || Object.keys(payload).some((key) => key !== "predictionTarget")) {
+    throw new ValidationError("Prediction target patch must contain only predictionTarget.");
+  }
+  const base = existing ?? validateRunnerProfilePayload({});
+  return {
+    ...base,
+    predictionTarget: validatePredictionTarget(payload.predictionTarget, base.predictionTarget ?? null),
+    updatedAt: new Date().toISOString()
+  };
+}
+
 function validatePredictionTarget(value: unknown, fallback: PredictionTargetConfig | null): PredictionTargetConfig | null {
   if (value === undefined) return fallback;
   if (value === null) return null;
@@ -203,23 +232,28 @@ function validatePredictionTarget(value: unknown, fallback: PredictionTargetConf
     : finiteNumber(target.targetFinishSec, "predictionTarget.targetFinishSec", 1);
   const targetDate = target.targetDate === null || target.targetDate === undefined
     ? null
-    : optionalDate(target.targetDate, "predictionTarget.targetDate");
+    : optionalDate(target.targetDate, "predictionTarget.targetDate", { allowFuture: true });
   if (mode === "finish-date" && targetFinishSec === null) throw new ValidationError("predictionTarget.targetFinishSec is required.");
   if (mode === "date-finish" && targetDate === null) throw new ValidationError("predictionTarget.targetDate is required.");
   return { mode: mode as PredictionMode, targetDistanceKm, targetFinishSec, targetDate };
 }
 
-export function validateShoePayload(input: unknown, existing?: RunningShoe): RunningShoe {
+export function validateShoePayload(input: unknown, existing?: RunningShoe, username?: string): RunningShoe {
   const payload = input as Partial<RunningShoe>;
   const now = new Date().toISOString();
   const name = stringValue(payload.name, "name");
   if (name.length > 80) {
     throw new ValidationError("name must be 80 characters or fewer.");
   }
+  const id = validateObjectId(stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"));
+  const photoKey = optionalString(payload.photoKey, "photoKey");
+  if (username && photoKey && !isUserShoePhotoKey(username, photoKey, id)) {
+    throw new ValidationError("photoKey must belong to this user's shoe.");
+  }
   return {
-    id: stringValue(payload.id ?? existing?.id ?? crypto.randomUUID(), "id"),
+    id,
     name,
-    photoKey: optionalString(payload.photoKey, "photoKey"),
+    photoKey,
     photoUrl: optionalString(payload.photoUrl, "photoUrl"),
     createdAt: existing?.createdAt ?? now,
     updatedAt: now

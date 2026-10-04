@@ -35,6 +35,15 @@ import { TRAINING_PACE_LABELS, VDOT_DISTANCES, buildVdotModel } from "@shared/vd
 
 type AuthMode = "login" | "register";
 type AppView = "home" | "records" | "vdot" | "prediction" | "shoes";
+const dashboardResourceLabels = {
+  runs: "跑步记录",
+  shoes: "跑鞋",
+  weights: "体重记录",
+  profile: "个人资料",
+  aiSettings: "智能分析设置"
+};
+type DashboardResource = keyof typeof dashboardResourceLabels;
+type LoadedResources = Partial<Record<DashboardResource, boolean>>;
 type VolumeChartMode = "weekly" | "monthly";
 type ProCacheStatus = "restored" | "missing" | "outdated" | "target-date-passed" | "target-date-required";
 type HistoryMonth = {
@@ -1380,10 +1389,20 @@ function ResearchChart({ runs, weights }: { runs: RunningRecord[]; weights: Weig
         }
       ]
     });
-    const resize = () => chart.resize();
+    let resizeFrame = 0;
+    const resize = () => {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        if (!chart.isDisposed() && ref.current && ref.current.clientWidth > 0 && ref.current.clientHeight > 0) chart.resize();
+      });
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(ref.current);
     window.addEventListener("resize", resize);
     return () => {
       window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
+      cancelAnimationFrame(resizeFrame);
       chart.dispose();
     };
   }, [runs, weights, volumeMode]);
@@ -1805,7 +1824,15 @@ function ChartCanvas({
       });
     };
 
-    const resize = () => chart.resize();
+    let resizeFrame = 0;
+    const resize = () => {
+      cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        if (!chart.isDisposed() && element.clientWidth > 0 && element.clientHeight > 0) chart.resize();
+      });
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(element);
     element.addEventListener("pointerdown", handlePointerDown);
     element.addEventListener("pointermove", handlePointerMove, { passive: false });
     element.addEventListener("pointerup", handlePointerUp);
@@ -1822,6 +1849,8 @@ function ChartCanvas({
       element.removeEventListener("pointerleave", handlePointerLeave);
       window.removeEventListener("running-platform:chart-selection", handleSelectionFromAnotherChart);
       window.removeEventListener("resize", resize);
+      resizeObserver.disconnect();
+      cancelAnimationFrame(resizeFrame);
       chart.off("datazoom", handleZoom);
       chart.dispose();
       chartRef.current = null;
@@ -3186,6 +3215,7 @@ function nullableDraftNumber(value: string): number | null {
 function RunnerProfileMenu({
   username,
   profile,
+  profileLoaded,
   deepseekStatus,
   deepPrompt,
   promptSaving,
@@ -3198,6 +3228,7 @@ function RunnerProfileMenu({
 }: {
   username: string;
   profile: RunnerProfile | null;
+  profileLoaded: boolean;
   deepseekStatus: DeepseekKeyStatus;
   deepPrompt: string;
   promptSaving: boolean;
@@ -3244,6 +3275,10 @@ function RunnerProfileMenu({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!profileLoaded) {
+      setMessage("请先成功加载个人资料后再保存。");
+      return;
+    }
     setBusy(true);
     setMessage("");
     try {
@@ -3252,8 +3287,8 @@ function RunnerProfileMenu({
         birthDate: draft.birthDate || null,
         sex: draft.sex || null,
         heightCm: nullableDraftNumber(draft.heightCm),
-        restingHeartRateBpm: null,
-        measuredMaxHeartRateBpm: null,
+        restingHeartRateBpm: profile?.restingHeartRateBpm ?? null,
+        measuredMaxHeartRateBpm: profile?.measuredMaxHeartRateBpm ?? null,
         predictionTarget: profile?.predictionTarget ?? null,
         createdAt: profile?.createdAt ?? now,
         updatedAt: now
@@ -3343,7 +3378,8 @@ function RunnerProfileMenu({
             身高 cm
             <input type="text" inputMode="decimal" value={draft.heightCm} onChange={(event) => setField("heightCm", event.target.value)} />
           </label>
-          <button className="primary-button" disabled={busy}>{busy ? "保存中..." : "保存个人资料"}</button>
+          <button className="primary-button" disabled={busy || !profileLoaded}>{busy ? "保存中..." : "保存个人资料"}</button>
+          {!profileLoaded && <p className="form-message profile-message">个人资料尚未成功加载，请先重试加载。</p>}
           <button type="button" className="ghost-button profile-logout-action" onClick={onLogout}>退出账户</button>
           {message && <p className="form-message profile-message">{message}</p>}
         </form>
@@ -3655,7 +3691,7 @@ function RunForm({
   const [recognizedText, setRecognizedText] = useState("");
   const [splitReviewFields, setSplitReviewFields] = useState<string[]>([]);
   const isNarrow = useNarrowViewport();
-  const [mobileSections, setMobileSections] = useState({ performance: false, environment: false, notes: false });
+  const [mobileSections, setMobileSections] = useState({ performance: true, environment: false, notes: false });
 
   useEffect(() => {
     setDraft(editingRun ? draftFromRun(editingRun) : newRunDraft());
@@ -3663,7 +3699,7 @@ function RunForm({
     setRecognizedText("");
     setSplitReviewFields([]);
     setMobileSections({
-      performance: Boolean(editingRun),
+      performance: true,
       environment: Boolean(editingRun),
       notes: Boolean(editingRun)
     });
@@ -3722,6 +3758,14 @@ function RunForm({
     try {
       const durationSec = parseDuration(draft.duration);
       const distanceKm = parseNumber(draft.distanceKm);
+      if (!Number.isFinite(distanceKm) || distanceKm <= 0 || !Number.isFinite(durationSec) || durationSec <= 0) {
+        throw new Error("请填写大于 0 的距离和总用时。");
+      }
+      if (!Number.isFinite(Number(draft.avgHeartRateBpm)) || Number(draft.avgHeartRateBpm) < 1 ||
+          !Number.isFinite(Number(draft.avgCadenceSpm)) || Number(draft.avgCadenceSpm) < 1) {
+        setMobileSections((current) => ({ ...current, performance: true }));
+        throw new Error("请在跑步表现中填写平均心率和平均步频（均需大于 0）。");
+      }
       const uploaded = files.length > 0 ? await api.uploadScreenshots(draft.id, files) : { keys: [] };
       const splits: RunSplit[] = draft.splits.map((split, index) => split.kind === "tail"
         ? {
@@ -3940,11 +3984,11 @@ function RunForm({
             </label>
             <label>
               平均心率 bpm
-              <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="numeric" />
+              <input value={draft.avgHeartRateBpm} onChange={(event) => setField("avgHeartRateBpm", event.target.value)} inputMode="numeric" aria-required="true" placeholder="必填" />
             </label>
             <label>
               平均步频 spm
-              <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="numeric" />
+              <input value={draft.avgCadenceSpm} onChange={(event) => setField("avgCadenceSpm", event.target.value)} inputMode="numeric" aria-required="true" placeholder="必填" />
             </label>
             <label>
               平均功率 W
@@ -4108,17 +4152,21 @@ function ShoeLibrary({
   shoes,
   runs,
   onSaved,
-  onDeleted
+  onDeleted,
+  onReload
 }: {
   shoes: RunningShoe[];
   runs: RunningRecord[];
   onSaved: (shoe: RunningShoe) => void;
   onDeleted: (shoeId: string) => void;
+  onReload: () => Promise<void>;
 }) {
   const [name, setName] = useState("");
   const [photo, setPhoto] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState("");
   const [editingShoe, setEditingShoe] = useState<RunningShoe | null>(null);
+  const [deletingShoeId, setDeletingShoeId] = useState<string | null>(null);
+  const [deleteFailure, setDeleteFailure] = useState<{ shoe: RunningShoe; message: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -4216,11 +4264,22 @@ function ShoeLibrary({
   }
 
   async function removeShoe(shoe: RunningShoe) {
+    if (deletingShoeId) return;
     const usedKm = mileageByShoe.get(shoe.id) ?? 0;
     const ok = window.confirm(`确定删除「${shoe.name}」吗？已关联的 ${formatKm(usedKm)} km 跑步记录会变为未选择跑鞋。`);
     if (!ok) return;
-    await api.deleteShoe(shoe.id);
-    onDeleted(shoe.id);
+    setDeletingShoeId(shoe.id);
+    setDeleteFailure(null);
+    try {
+      await api.deleteShoe(shoe.id);
+      onDeleted(shoe.id);
+      if (editingShoe?.id === shoe.id) cancelEdit();
+    } catch (error) {
+      setDeleteFailure({ shoe, message: error instanceof Error ? error.message : "请稍后重试。" });
+      await onReload();
+    } finally {
+      setDeletingShoeId(null);
+    }
   }
 
   return (
@@ -4259,6 +4318,12 @@ function ShoeLibrary({
         </form>
       </section>
 
+      {deleteFailure && (
+        <section className="data-load-error" role="alert" aria-label="跑鞋删除失败">
+          <div><strong>跑鞋删除失败</strong><p>{deleteFailure.message}</p></div>
+          {shoes.some((shoe) => shoe.id === deleteFailure.shoe.id) && <button type="button" className="ghost-button" disabled={Boolean(deletingShoeId)} onClick={() => void removeShoe(deleteFailure.shoe)}>重试删除</button>}
+        </section>
+      )}
       <section className="shoe-grid">
         {shoes.map((shoe) => {
           const usedKm = mileageByShoe.get(shoe.id) ?? 0;
@@ -4298,8 +4363,8 @@ function ShoeLibrary({
                   <button type="button" className="ghost-button small-button" onClick={() => setEditingShoe(shoe)}>
                     编辑
                   </button>
-                  <button type="button" className="ghost-button small-button danger-button" onClick={() => removeShoe(shoe)}>
-                    删除
+                  <button type="button" className="ghost-button small-button danger-button" disabled={Boolean(deletingShoeId)} onClick={() => void removeShoe(shoe)}>
+                    {deletingShoeId === shoe.id ? "删除中..." : "删除"}
                   </button>
                 </div>
               </div>
@@ -4313,38 +4378,58 @@ function ShoeLibrary({
 }
 
 function WeightForm({
+  weights,
   editingWeight,
   onCancelEdit,
-  onSaved
+  onSaved,
+  onReload,
+  onSaveError
 }: {
+  weights: WeightRecord[];
   editingWeight: WeightRecord | null;
   onCancelEdit: () => void;
   onSaved: (weight: WeightRecord, previousDate: string | null) => void;
+  onReload: () => Promise<void>;
+  onSaveError: (message: string) => void;
 }) {
-  const [date, setDate] = useState(editingWeight?.date ?? new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => editingWeight?.date ?? localDateTime().slice(0, 10));
   const [weightKg, setWeightKg] = useState(editingWeight ? String(editingWeight.weightKg) : "");
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    setDate(editingWeight?.date ?? new Date().toISOString().slice(0, 10));
+    setDate(editingWeight?.date ?? localDateTime().slice(0, 10));
     setWeightKg(editingWeight ? String(editingWeight.weightKg) : "");
     setMessage("");
   }, [editingWeight]);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (busy) return;
+    if (weights.some((weight) => weight.date === date && weight.date !== editingWeight?.date)) {
+      setMessage("该日期已有体重记录，请编辑该条记录，或选择其他日期。");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    onSaveError("");
     try {
-      const saved = await api.saveWeight({ date, weightKg: parseNumber(weightKg) });
+      const saved = await api.saveWeight({ date, weightKg: parseNumber(weightKg), previousDate: editingWeight?.date });
       const previousDate = editingWeight && editingWeight.date !== date ? editingWeight.date : null;
-      if (editingWeight && editingWeight.date !== date) {
-        await api.deleteWeight(editingWeight.date);
-      }
       setWeightKg("");
       setMessage(editingWeight ? "体重记录已更新。" : "体重记录已保存。");
       onSaved(saved.weight, previousDate);
       onCancelEdit();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "保存失败。");
+      const reason = error instanceof Error ? error.message : "保存失败。";
+      try {
+        await onReload();
+        onSaveError(`保存请求失败：${reason} 已重新加载当前记录，请核对结果后重试。`);
+      } catch {
+        onSaveError(`保存请求失败：${reason} 当前记录也未能重新加载，请稍后刷新核对。`);
+      }
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -4356,7 +4441,7 @@ function WeightForm({
           <h2>{editingWeight ? "编辑体重记录" : "体重记录"}</h2>
         </div>
         {editingWeight && (
-          <button type="button" className="ghost-button" onClick={onCancelEdit}>
+          <button type="button" className="ghost-button" onClick={onCancelEdit} disabled={busy}>
             取消编辑
           </button>
         )}
@@ -4364,14 +4449,14 @@ function WeightForm({
       <form className="data-form compact" onSubmit={submit}>
         <label>
           日期
-          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+          <input type="date" value={date} onChange={(event) => setDate(event.target.value)} required disabled={busy} />
         </label>
         <label>
           体重 kg
-          <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" />
+          <input value={weightKg} onChange={(event) => setWeightKg(event.target.value)} inputMode="decimal" required disabled={busy} />
         </label>
-        <button className="primary-button">{editingWeight ? "确认更新体重" : "保存体重"}</button>
-        {message && <p className="form-message wide">{message}</p>}
+        <button className="primary-button" disabled={busy}>{busy ? "保存中..." : editingWeight ? "确认更新体重" : "保存体重"}</button>
+        {message && <p className="form-message wide" role="status">{message}</p>}
       </form>
     </section>
   );
@@ -4381,12 +4466,14 @@ function RecordOverview({
   runs,
   weights,
   shoes,
-  loading
+  loading,
+  loaded
 }: {
   runs: RunningRecord[];
   weights: WeightRecord[];
   shoes: RunningShoe[];
   loading: boolean;
+  loaded: LoadedResources;
 }) {
   const latestRun = runs[0] ?? null;
   return (
@@ -4399,16 +4486,16 @@ function RecordOverview({
         {loading && <span className="loading-dot">同步中</span>}
       </div>
       <div className="record-overview-grid">
-        <div><span>跑步</span><strong>{runs.length} 次</strong></div>
-        <div><span>体重</span><strong>{weights.length} 条</strong></div>
-        <div><span>跑鞋</span><strong>{shoes.length} 双</strong></div>
+        <div><span>跑步</span><strong>{loaded.runs ? `${runs.length} 次` : "待加载"}</strong></div>
+        <div><span>体重</span><strong>{loaded.weights ? `${weights.length} 条` : "待加载"}</strong></div>
+        <div><span>跑鞋</span><strong>{loaded.shoes ? `${shoes.length} 双` : "待加载"}</strong></div>
       </div>
       <div className="record-latest-run">
         <span>最近一次跑步</span>
         {latestRun ? (
           <strong>{runLocalDate(latestRun)} · {latestRun.distanceKm.toFixed(2)} km · {formatPace(latestRun.avgPaceSecPerKm)} /km</strong>
         ) : (
-          <strong>暂无记录</strong>
+          <strong>{loaded.runs ? "暂无记录" : "跑步记录尚未加载"}</strong>
         )}
       </div>
     </section>
@@ -4422,7 +4509,8 @@ function HistoryManager({
   onEditRun,
   onEditWeight,
   onDeleteRun,
-  onDeleteWeight
+  onDeleteWeight,
+  deleting = false
 }: {
   runs: RunningRecord[];
   shoes: RunningShoe[];
@@ -4431,6 +4519,7 @@ function HistoryManager({
   onEditWeight: (weight: WeightRecord) => void;
   onDeleteRun: (run: RunningRecord) => void;
   onDeleteWeight: (weight: WeightRecord) => void;
+  deleting?: boolean;
 }) {
   const months = groupHistoryByMonth(runs, weights);
   const shoeNames = useMemo(() => new Map(shoes.map((shoe) => [shoe.id, shoe.name])), [shoes]);
@@ -4529,7 +4618,7 @@ function HistoryManager({
                               <button type="button" className="ghost-button small-button" onClick={() => onEditRun(run)}>
                                 编辑
                               </button>
-                              <button type="button" className="ghost-button small-button danger-button" onClick={() => onDeleteRun(run)}>
+                              <button type="button" className="ghost-button small-button danger-button" disabled={deleting} onClick={() => onDeleteRun(run)}>
                                 删除
                               </button>
                             </div>
@@ -4557,7 +4646,7 @@ function HistoryManager({
                             <button type="button" className="ghost-button small-button" onClick={() => onEditWeight(weight)}>
                               编辑
                             </button>
-                            <button type="button" className="ghost-button small-button danger-button" onClick={() => onDeleteWeight(weight)}>
+                            <button type="button" className="ghost-button small-button danger-button" disabled={deleting} onClick={() => onDeleteWeight(weight)}>
                               删除
                             </button>
                           </div>
@@ -4609,9 +4698,21 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   });
   const [appliedTargetDateInput, setAppliedTargetDateInput] = useState(targetDateInput);
   const [targetError, setTargetError] = useState("");
+  const [targetSaving, setTargetSaving] = useState(false);
+  const targetSaveVersion = useRef(0);
+  const targetSavePending = useRef(false);
   const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState<Partial<Record<DashboardResource, string>>>({});
+  const [loadedResources, setLoadedResources] = useState<LoadedResources>({});
+  const loadVersion = useRef(0);
+  const dashboardMounted = useRef(false);
+  const aiRequestVersion = useRef(0);
+  const promptRequestVersion = useRef(0);
   const [editingRun, setEditingRun] = useState<RunningRecord | null>(null);
   const [editingWeight, setEditingWeight] = useState<WeightRecord | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteFailure, setDeleteFailure] = useState<{ message: string; run?: RunningRecord; weight?: WeightRecord } | null>(null);
+  const [weightSaveError, setWeightSaveError] = useState("");
   const [activeView, setActiveView] = useState<AppView>("home");
 
   function switchView(view: AppView) {
@@ -4626,40 +4727,69 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
     });
   }
 
-  async function refresh() {
+  async function refresh(resources = Object.keys(dashboardResourceLabels) as DashboardResource[]) {
+    const version = ++loadVersion.current;
     setLoading(true);
-    const [runData, shoeData, weightData, profileData, aiSettingsData] = await Promise.all([
-      api.listRuns(),
-      api.listShoes(),
-      api.listWeights(),
-      api.getRunnerProfile(),
-      api.getDeepseekSettings().catch(() => ({ deepseek: { configured: false, maskedKey: null, updatedAt: null, customPrompt: "" } satisfies DeepseekKeyStatus }))
-    ]);
-    setRuns(sortRuns(runData.runs));
-    setShoes(sortShoes(shoeData.shoes));
-    setWeights(sortWeights(weightData.weights));
-    setRunnerProfile(profileData.profile);
-    const savedTarget = profileData.profile?.predictionTarget;
-    if (savedTarget) {
-      setTargetDistance(savedTarget.targetDistanceKm);
-      setTargetDistanceInput(String(savedTarget.targetDistanceKm));
-      setPredictionMode(savedTarget.mode);
-      setAppliedPredictionMode(savedTarget.mode);
-      const finishInput = savedTarget.targetFinishSec ? formatDuration(savedTarget.targetFinishSec) : "2:00:00";
-      setTargetFinishInput(finishInput);
-      setAppliedTargetFinishInput(finishInput);
-      if (savedTarget.targetDate) {
-        setTargetDateInput(savedTarget.targetDate);
-        setAppliedTargetDateInput(savedTarget.targetDate);
+
+    async function load<T>(resource: DashboardResource, request: () => Promise<T>, apply: (data: T) => void) {
+      if (!resources.includes(resource)) return;
+      try {
+        const data = await request();
+        if (version !== loadVersion.current) return;
+        apply(data);
+        setLoadedResources((current) => ({ ...current, [resource]: true }));
+        setLoadErrors((current) => {
+          const next = { ...current };
+          delete next[resource];
+          return next;
+        });
+      } catch (error) {
+        if (version !== loadVersion.current) return;
+        setLoadErrors((current) => ({
+          ...current,
+          [resource]: error instanceof Error ? error.message : "请检查网络后重试。"
+        }));
       }
     }
-    setDeepseekStatus(aiSettingsData.deepseek);
-    setDeepPrompt(aiSettingsData.deepseek.customPrompt);
-    setLoading(false);
+
+    await Promise.all([
+      load("runs", api.listRuns, (data) => setRuns(sortRuns(data.runs))),
+      load("shoes", api.listShoes, (data) => setShoes(sortShoes(data.shoes))),
+      load("weights", api.listWeights, (data) => setWeights(sortWeights(data.weights))),
+      load("profile", api.getRunnerProfile, (data) => {
+        setRunnerProfile(data.profile);
+        const savedTarget = data.profile?.predictionTarget;
+        if (!savedTarget) return;
+        setTargetDistance(savedTarget.targetDistanceKm);
+        setTargetDistanceInput(String(savedTarget.targetDistanceKm));
+        setPredictionMode(savedTarget.mode);
+        setAppliedPredictionMode(savedTarget.mode);
+        const finishInput = savedTarget.targetFinishSec ? formatDuration(savedTarget.targetFinishSec) : "2:00:00";
+        setTargetFinishInput(finishInput);
+        setAppliedTargetFinishInput(finishInput);
+        if (savedTarget.targetDate) {
+          setTargetDateInput(savedTarget.targetDate);
+          setAppliedTargetDateInput(savedTarget.targetDate);
+        }
+      }),
+      load("aiSettings", api.getDeepseekSettings, (data) => {
+        setDeepseekStatus(data.deepseek);
+        setDeepPrompt(data.deepseek.customPrompt);
+      })
+    ]);
+    if (version === loadVersion.current) setLoading(false);
   }
 
   useEffect(() => {
-    refresh().catch(() => setLoading(false));
+    dashboardMounted.current = true;
+    void refresh();
+    return () => {
+      dashboardMounted.current = false;
+      loadVersion.current += 1;
+      aiRequestVersion.current += 1;
+      promptRequestVersion.current += 1;
+      targetSaveVersion.current += 1;
+    };
   }, []);
 
   useEffect(() => {
@@ -4678,23 +4808,54 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   const aiTargetFinishSec = appliedPredictionMode === "finish-date" ? parseDuration(appliedTargetFinishInput) : null;
   const aiTargetDate = appliedPredictionMode === "date-finish" ? appliedTargetDateInput : null;
+  const aiContext = useMemo(() => ({
+    activeView,
+    configured: deepseekStatus.configured,
+    keyUpdatedAt: deepseekStatus.updatedAt,
+    predictionStatus: prediction?.status,
+    targetDistance,
+    targetFinishSec: aiTargetFinishSec,
+    targetDate: aiTargetDate,
+    runs,
+    weights,
+    runnerProfile,
+    username: user.username
+  }), [activeView, deepseekStatus.configured, deepseekStatus.updatedAt, prediction?.status,
+    targetDistance, aiTargetFinishSec, aiTargetDate, runs, weights, runnerProfile, user.username]);
+  const currentAiContext = useRef(aiContext);
+  currentAiContext.current = aiContext;
+  const [pendingDeepRequest, setPendingDeepRequest] = useState<{
+    context: typeof aiContext;
+    force: boolean;
+    promptVersion: number;
+  } | null>(null);
+
+  function samePredictionInput(first: typeof aiContext, second: typeof aiContext) {
+    return first.activeView === second.activeView && first.username === second.username &&
+      first.targetDistance === second.targetDistance && first.targetFinishSec === second.targetFinishSec &&
+      first.targetDate === second.targetDate && first.runs === second.runs && first.weights === second.weights &&
+      first.runnerProfile === second.runnerProfile && first.predictionStatus === second.predictionStatus;
+  }
 
   useEffect(() => {
-    if (activeView !== "prediction" || !deepseekStatus.configured || prediction?.status !== "ready") return;
-    let ignore = false;
+    const version = ++aiRequestVersion.current;
+    const isCurrent = () => dashboardMounted.current && version === aiRequestVersion.current && currentAiContext.current === aiContext;
     setAiAnalysis(null);
     setDeepAnalysis(null);
     setDeepError("");
+    setDeepLoading(false);
+    setAiLoading(false);
     setProCacheStatus("missing");
-    setAiLoading(true);
     setAiError("");
+    if (aiContext.activeView !== "prediction" || !aiContext.configured || aiContext.predictionStatus !== "ready") return;
+    setAiLoading(true);
     api.aiPrediction({
       kind: "current",
       targetDistanceKm: targetDistance,
       targetFinishSec: aiTargetFinishSec,
       targetDate: aiTargetDate
     }).then((result) => {
-      if (!ignore) {
+      if (isCurrent()) {
         setProCacheStatus(result.proCacheStatus ?? "missing");
         if (result.analysis.kind === "deep") {
           setDeepAnalysis(result.analysis);
@@ -4705,22 +4866,23 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
         }
       }
     }).catch((error) => {
-      if (!ignore) setAiError(error instanceof Error ? error.message : "AI 分析生成失败。");
+      if (isCurrent()) setAiError(error instanceof Error ? error.message : "AI 分析生成失败。");
     }).finally(() => {
-      if (!ignore) setAiLoading(false);
+      if (isCurrent()) setAiLoading(false);
     });
-    return () => { ignore = true; };
-  }, [
-    activeView,
-    deepseekStatus.configured,
-    prediction?.status,
-    targetDistance,
-    aiTargetFinishSec,
-    aiTargetDate,
-    runs,
-    weights,
-    runnerProfile
-  ]);
+    return () => {
+      if (version === aiRequestVersion.current) aiRequestVersion.current += 1;
+    };
+  }, [aiContext]);
+
+  useEffect(() => {
+    if (!pendingDeepRequest) return;
+    setPendingDeepRequest(null);
+    if (dashboardMounted.current && pendingDeepRequest.promptVersion === promptRequestVersion.current &&
+      samePredictionInput(pendingDeepRequest.context, aiContext)) {
+      void generateDeepAnalysis(pendingDeepRequest.force).catch(() => undefined);
+    }
+  }, [aiContext, pendingDeepRequest]);
 
   useEffect(() => {
     if (!deepLoading) return;
@@ -4733,24 +4895,38 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   }, [deepLoading]);
 
   async function saveDeepPrompt(regenerate = true): Promise<void> {
+    const version = ++promptRequestVersion.current;
+    const context = currentAiContext.current;
+    const isCurrent = () => dashboardMounted.current && version === promptRequestVersion.current;
+    aiRequestVersion.current += 1;
+    setAiLoading(false);
+    setDeepLoading(false);
     setPromptSaving(true);
     setPromptError("");
     try {
       const result = await api.saveDeepseekPrompt(deepPrompt);
+      if (!isCurrent()) return;
       setDeepseekStatus(result.deepseek);
       setDeepPrompt(result.deepseek.customPrompt);
-      if (regenerate && result.deepseek.configured && prediction?.status === "ready") {
-        await generateDeepAnalysis(true).catch(() => undefined);
+      if (regenerate && samePredictionInput(currentAiContext.current, context) && result.deepseek.configured && context.predictionStatus === "ready") {
+        setPendingDeepRequest({ context, force: true, promptVersion: version });
       }
     } catch (error) {
+      if (!isCurrent()) return;
       setPromptError(error instanceof Error ? error.message : "个性化提示词保存失败。");
       throw error;
     } finally {
-      setPromptSaving(false);
+      if (isCurrent()) setPromptSaving(false);
     }
   }
 
   async function generateDeepAnalysis(force = false): Promise<void> {
+    const context = currentAiContext.current;
+    if (!dashboardMounted.current || !context.configured || context.predictionStatus !== "ready") return;
+    const version = ++aiRequestVersion.current;
+    const isCurrent = () => dashboardMounted.current && version === aiRequestVersion.current && currentAiContext.current === context;
+    setAiLoading(false);
+    setAiError("");
     setDeepLoading(true);
     setDeepPhase("preparing");
     setDeepError("");
@@ -4758,32 +4934,41 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       setDeepPhase("analyzing");
       const result = await api.aiPrediction({
         kind: "deep",
-        targetDistanceKm: targetDistance,
-        targetFinishSec: aiTargetFinishSec,
-        targetDate: aiTargetDate,
+        targetDistanceKm: context.targetDistance,
+        targetFinishSec: context.targetFinishSec,
+        targetDate: context.targetDate,
         force
       });
+      if (!isCurrent()) return;
       setDeepPhase("finalizing");
       await new Promise((resolve) => window.setTimeout(resolve, 320));
+      if (!isCurrent()) return;
       if (result.analysis.kind === "deep") setDeepAnalysis(result.analysis);
       if (result.standard) setAiAnalysis(result.standard);
       if (result.analysis.kind === "deep") setProCacheStatus("restored");
     } catch (error) {
+      if (!isCurrent()) return;
       setDeepError(error instanceof Error ? error.message : "深度分析生成失败。");
       throw error;
     } finally {
-      setDeepLoading(false);
+      if (isCurrent()) setDeepLoading(false);
     }
   }
 
   async function requestDeepAnalysis(force = false) {
+    const context = currentAiContext.current;
     if (deepPrompt.trim() !== deepseekStatus.customPrompt) {
       try {
         await saveDeepPrompt(false);
       } catch {
         return;
       }
+      if (dashboardMounted.current && samePredictionInput(currentAiContext.current, context)) {
+        setPendingDeepRequest({ context, force, promptVersion: promptRequestVersion.current });
+      }
+      return;
     }
+    if (!dashboardMounted.current || currentAiContext.current !== context) return;
     await generateDeepAnalysis(force).catch(() => undefined);
   }
 
@@ -4827,6 +5012,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
   async function applyPredictionTarget(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
+    if (targetSavePending.current) return;
     const trimmedDistance = targetDistanceInput.trim();
     if (!isCompleteDecimalInput(trimmedDistance)) {
       setTargetError("请先完整输入目标距离。");
@@ -4846,23 +5032,30 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       setTargetError("请选择有效的目标日期。");
       return;
     }
-    const now = new Date().toISOString();
-    const profilePayload: RunnerProfile = {
-      birthDate: runnerProfile?.birthDate ?? null,
-      sex: runnerProfile?.sex ?? null,
-      heightCm: runnerProfile?.heightCm ?? null,
-      restingHeartRateBpm: runnerProfile?.restingHeartRateBpm ?? null,
-      measuredMaxHeartRateBpm: runnerProfile?.measuredMaxHeartRateBpm ?? null,
-      predictionTarget: { mode: nextMode, targetDistanceKm: nextDistance, targetFinishSec: nextFinishSec, targetDate: nextDate },
-      createdAt: runnerProfile?.createdAt ?? now,
-      updatedAt: now
-    };
+    const version = ++targetSaveVersion.current;
+    const isCurrent = () => dashboardMounted.current && version === targetSaveVersion.current;
+    targetSavePending.current = true;
+    setTargetSaving(true);
     try {
-      const saved = (await api.saveRunnerProfile(profilePayload)).profile;
+      const saved = (await api.savePredictionTarget({
+        mode: nextMode, targetDistanceKm: nextDistance, targetFinishSec: nextFinishSec, targetDate: nextDate
+      })).profile;
+      if (!isCurrent()) return;
       setRunnerProfile(saved);
+      setLoadedResources((current) => ({ ...current, profile: true }));
+      setLoadErrors((current) => {
+        const next = { ...current };
+        delete next.profile;
+        return next;
+      });
     } catch (error) {
-      setTargetError(error instanceof Error ? `目标未保存：${error.message}` : "目标保存失败，请稍后重试。");
+      if (isCurrent()) setTargetError(error instanceof Error ? `目标未保存：${error.message}` : "目标保存失败，请稍后重试。");
       return;
+    } finally {
+      if (isCurrent()) {
+        targetSavePending.current = false;
+        setTargetSaving(false);
+      }
     }
     setTargetError("");
     setTargetDistance(nextDistance);
@@ -4873,23 +5066,39 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
   }
 
   async function deleteRunRecord(run: RunningRecord) {
+    if (deleting) return;
     const ok = window.confirm(`确定删除 ${runLocalDate(run)} 的跑步记录吗？此操作不能撤销。`);
     if (!ok) return;
-    await api.deleteRun(run.id);
-    if (editingRun?.id === run.id) {
-      setEditingRun(null);
+    setDeleting(true);
+    setDeleteFailure(null);
+    try {
+      await api.deleteRun(run.id);
+      if (editingRun?.id === run.id) setEditingRun(null);
+      setRuns((current) => current.filter((item) => item.id !== run.id));
+    } catch (error) {
+      setDeleteFailure({ run, message: error instanceof Error ? error.message : "请稍后重试。" });
+      await refresh(["runs"]);
+    } finally {
+      setDeleting(false);
     }
-    setRuns((current) => current.filter((item) => item.id !== run.id));
   }
 
   async function deleteWeightRecord(weight: WeightRecord) {
+    if (deleting) return;
     const ok = window.confirm(`确定删除 ${weight.date} 的体重记录吗？此操作不能撤销。`);
     if (!ok) return;
-    await api.deleteWeight(weight.date);
-    if (editingWeight?.date === weight.date) {
-      setEditingWeight(null);
+    setDeleting(true);
+    setDeleteFailure(null);
+    try {
+      await api.deleteWeight(weight.date);
+      if (editingWeight?.date === weight.date) setEditingWeight(null);
+      setWeights((current) => current.filter((item) => item.date !== weight.date));
+    } catch (error) {
+      setDeleteFailure({ weight, message: error instanceof Error ? error.message : "请稍后重试。" });
+      await refresh(["weights"]);
+    } finally {
+      setDeleting(false);
     }
-    setWeights((current) => current.filter((item) => item.date !== weight.date));
   }
 
   return (
@@ -4951,6 +5160,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
           <RunnerProfileMenu
             username={user.username}
             profile={runnerProfile}
+            profileLoaded={loadedResources.profile === true}
             deepseekStatus={deepseekStatus}
             deepPrompt={deepPrompt}
             promptSaving={promptSaving}
@@ -4974,24 +5184,64 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
         </div>
       </header>
 
+      {Object.keys(loadErrors).length > 0 && (
+        <section className="data-load-error" role="alert" aria-label="数据加载失败">
+          <div>
+            <strong>部分数据加载失败</strong>
+            <p>已加载的数据仍可查看；请重试失败的项目。</p>
+            <ul>
+              {Object.entries(loadErrors).map(([resource, message]) => (
+                <li key={resource}>{dashboardResourceLabels[resource as DashboardResource]}：{message}</li>
+              ))}
+            </ul>
+          </div>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={loading}
+            onClick={() => void refresh(Object.keys(loadErrors) as DashboardResource[])}
+          >
+            {loading ? "加载中..." : "重试加载"}
+          </button>
+        </section>
+      )}
+
+      {deleteFailure && (
+        <section className="data-load-error" role="alert" aria-label="删除失败">
+          <div><strong>删除请求失败</strong><p>{deleteFailure.message}</p><p>已尝试重新加载记录，请核对当前列表。</p></div>
+          {((deleteFailure.run && runs.some((run) => run.id === deleteFailure.run?.id)) ||
+            (deleteFailure.weight && weights.some((weight) => weight.date === deleteFailure.weight?.date))) && (
+            <button
+              type="button"
+              className="ghost-button"
+              disabled={deleting}
+              onClick={() => {
+                if (deleteFailure.run) void deleteRunRecord(deleteFailure.run);
+                else if (deleteFailure.weight) void deleteWeightRecord(deleteFailure.weight);
+              }}
+            >重试删除</button>
+          )}
+        </section>
+      )}
+
       {activeView === "home" && (
         <section className="home-dashboard">
           <section className="summary-grid" aria-label="跑步数据概览">
             <div className="metric-card">
               <span>累计距离</span>
-              <strong>{summary.totalDistance.toFixed(1)} km</strong>
+              <strong>{loadedResources.runs ? `${summary.totalDistance.toFixed(1)} km` : "待加载"}</strong>
             </div>
             <div className="metric-card">
               <span>最佳平均配速</span>
-              <strong>{summary.bestPace ? formatPace(summary.bestPace) : "-"}</strong>
+              <strong>{!loadedResources.runs ? "待加载" : summary.bestPace ? formatPace(summary.bestPace) : "-"}</strong>
             </div>
             <div className="metric-card">
               <span>最新体重</span>
-              <strong>{summary.latestWeight ? `${summary.latestWeight.toFixed(1)} kg` : "-"}</strong>
+              <strong>{!loadedResources.weights ? "待加载" : summary.latestWeight ? `${summary.latestWeight.toFixed(1)} kg` : "-"}</strong>
             </div>
             <div className="metric-card">
               <span>记录次数</span>
-              <strong>{runs.length}</strong>
+              <strong>{loadedResources.runs ? runs.length : "待加载"}</strong>
             </div>
           </section>
 
@@ -5006,7 +5256,11 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               {runs.length || weights.length ? (
                 <IndependentResearchCharts runs={runs} weights={weights} />
               ) : (
-                <div className="empty-chart">保存跑步或体重记录后显示趋势图。</div>
+                <div className="empty-chart">
+                  {loadedResources.runs && loadedResources.weights
+                    ? "保存跑步或体重记录后显示趋势图。"
+                    : loading ? "正在加载跑步和体重记录..." : "数据尚未完整加载，请重试。"}
+                </div>
               )}
             </div>
           </section>
@@ -5025,7 +5279,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
             <form className="target-controls" onSubmit={applyPredictionTarget}>
               <label className="target-input">
                 预测模式
-                <select value={predictionMode} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
+                <select value={predictionMode} disabled={targetSaving} onChange={(event) => setPredictionMode(event.target.value as PredictionMode)}>
                   <option value="distance-date">只看距离达成日期</option>
                   <option value="finish-date">目标距离 + 完赛时间</option>
                   <option value="date-finish">目标距离 + 达成日期</option>
@@ -5033,22 +5287,22 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               </label>
               <label className="target-input">
                 目标距离 km
-                <input inputMode="decimal" value={targetDistanceInput} onChange={(event) => setTargetDistanceInput(event.target.value)} />
+                <input inputMode="decimal" value={targetDistanceInput} disabled={targetSaving} onChange={(event) => setTargetDistanceInput(event.target.value)} />
               </label>
               {predictionMode === "finish-date" && (
                 <label className="target-input">
                   目标完赛
-                  <input value={targetFinishInput} onChange={(event) => setTargetFinishInput(event.target.value)} placeholder="2:00:00" />
+                  <input value={targetFinishInput} disabled={targetSaving} onChange={(event) => setTargetFinishInput(event.target.value)} placeholder="2:00:00" />
                 </label>
               )}
               {predictionMode === "date-finish" && (
                 <label className="target-input">
                   目标日期
-                  <input type="date" value={targetDateInput} onChange={(event) => setTargetDateInput(event.target.value)} />
+                  <input type="date" value={targetDateInput} disabled={targetSaving} onChange={(event) => setTargetDateInput(event.target.value)} />
                 </label>
               )}
               <div className="target-apply">
-                <button type="submit" className="primary-button small-primary">更新预测</button>
+                <button type="submit" className="primary-button small-primary" disabled={targetSaving}>{targetSaving ? "保存中..." : "更新预测"}</button>
                 {targetIsDirty && <span>未应用</span>}
               </div>
               {targetError && <p className="target-error">{targetError}</p>}
@@ -5084,11 +5338,27 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
 
       {activeView === "records" && (
         <section className="records-page">
+          {weightSaveError && (
+            <section className="data-load-error" role="alert" aria-label="体重保存失败">
+              <div><strong>体重保存请求失败</strong><p>{weightSaveError}</p></div>
+            </section>
+          )}
           <section className="workspace-grid">
             <RunForm shoes={shoes} editingRun={editingRun} onCancelEdit={() => setEditingRun(null)} onSaved={upsertRun} />
             <div className="side-column">
-              <WeightForm editingWeight={editingWeight} onCancelEdit={() => setEditingWeight(null)} onSaved={upsertWeight} />
-              <RecordOverview runs={runs} weights={weights} shoes={shoes} loading={loading} />
+              <WeightForm
+                weights={weights}
+                editingWeight={editingWeight}
+                onCancelEdit={() => setEditingWeight(null)}
+                onSaved={upsertWeight}
+                onSaveError={setWeightSaveError}
+                onReload={async () => {
+                  const result = await api.listWeights();
+                  setWeights(result.weights);
+                  if (editingWeight && !result.weights.some((weight) => weight.date === editingWeight.date)) setEditingWeight(null);
+                }}
+              />
+              <RecordOverview runs={runs} weights={weights} shoes={shoes} loading={loading} loaded={loadedResources} />
             </div>
           </section>
           <HistoryManager
@@ -5100,11 +5370,13 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
               scrollToForms();
             }}
             onEditWeight={(weight) => {
+              setWeightSaveError("");
               setEditingWeight(weight);
               scrollToForms();
             }}
             onDeleteRun={deleteRunRecord}
             onDeleteWeight={deleteWeightRecord}
+            deleting={deleting}
           />
         </section>
       )}
@@ -5112,7 +5384,7 @@ function Dashboard({ user, onLogout }: { user: PublicUser; onLogout: () => void 
       {activeView === "vdot" && <VdotPage runs={runs} />}
 
       {activeView === "shoes" && (
-        <ShoeLibrary shoes={shoes} runs={runs} onSaved={upsertShoe} onDeleted={removeShoeFromState} />
+        <ShoeLibrary shoes={shoes} runs={runs} onSaved={upsertShoe} onDeleted={removeShoeFromState} onReload={() => refresh(["shoes", "runs"])} />
       )}
     </main>
   );

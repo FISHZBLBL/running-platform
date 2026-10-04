@@ -11,7 +11,7 @@ export default async function shoes(req: Request): Promise<Response> {
       return json({ shoes: await listShoes(username) });
     }
     if (req.method === "POST") {
-      const shoe = validateShoePayload(await parseJson(req));
+      const shoe = validateShoePayload(await parseJson(req), undefined, username);
       await saveShoe(username, shoe);
       return json({ shoe }, { status: 201 });
     }

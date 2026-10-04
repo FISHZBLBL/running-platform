@@ -1,5 +1,5 @@
 import type { Config } from "@netlify/functions";
-import { screenshotKey } from "../../shared/cosKeys";
+import { screenshotKey, validateObjectId } from "../../shared/cosKeys";
 import { requireUsername } from "./_shared/auth";
 import { errorResponse, json, methodNotAllowed } from "./_shared/responses";
 import { storage } from "./_shared/storage";
@@ -23,6 +23,7 @@ export default async function uploads(req: Request): Promise<Response> {
     if (!runId) {
       return json({ error: "runId is required before uploading screenshots." }, { status: 400 });
     }
+    validateObjectId(runId, "runId");
     const files = form.getAll("screenshots").filter((value): value is File => value instanceof File);
     if (files.length === 0) {
       return json({ error: "At least one screenshot is required." }, { status: 400 });

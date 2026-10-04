@@ -2,6 +2,27 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { fileURLToPath, URL } from "node:url";
 import { Buffer } from "node:buffer";
+import { rm } from "node:fs/promises";
+import path from "node:path";
+
+function excludePrivatePreviewData() {
+  let config;
+  return {
+    name: "exclude-private-preview-data",
+    apply: "build",
+    configResolved(resolved) {
+      config = resolved;
+    },
+    async writeBundle(output) {
+      // Vite serves these optional local fixtures during development. Remove only
+      // their copied outputs after a build; keep the original public assets intact.
+      const outputDirectory = path.resolve(config.root, output.dir ?? config.build.outDir);
+      await Promise.all(["runs", "shoes", "weights"].map((resource) =>
+        rm(path.join(outputDirectory, `local-preview-${resource}.json`), { force: true })
+      ));
+    }
+  };
+}
 
 const LOCAL_AI_FUNCTIONS = {
   "/api/ai-settings/deepseek": "/netlify/functions/ai-settings.ts",
@@ -68,7 +89,7 @@ function localAiFunctions() {
 }
 
 export default defineConfig({
-  plugins: [react(), localAiFunctions()],
+  plugins: [react(), localAiFunctions(), excludePrivatePreviewData()],
   resolve: {
     alias: {
       "@shared": fileURLToPath(new URL("./shared", import.meta.url))

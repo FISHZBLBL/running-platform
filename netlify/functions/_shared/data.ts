@@ -45,6 +45,73 @@ type LockRecord = {
   acquiredAt: number;
 };
 
+type RecordMutation<T> = {
+  records: T[];
+  puts: { key: string; value: unknown }[];
+  deletes: string[];
+};
+
+const RECORD_LOCK_OPTIONS: LockOptions = { heartbeatMs: 2_000 };
+
+function pendingMutationKey(indexKey: string): string {
+  return `${indexKey}.pending`;
+}
+
+function consistentIndexKey(indexKey: string): string {
+  return `${indexKey}.consistent-v2`;
+}
+
+// A durable intent precedes every object change. Replaying it is idempotent, so a
+// different function instance can finish an interrupted write before serving data.
+async function recoverRecordMutation<T>(indexKey: string): Promise<void> {
+  const pending = await readJson<RecordMutation<T>>(pendingMutationKey(indexKey));
+  if (!pending) return;
+  for (const put of pending.puts) await writeJson(put.key, put.value);
+  for (const key of pending.deletes) await storage().delete(key);
+  await writeJson(indexKey, pending.records);
+  await storage().putText(consistentIndexKey(indexKey), "2");
+  await storage().delete(pendingMutationKey(indexKey));
+}
+
+async function currentRecords<T>(indexKey: string, readObjects: () => Promise<T[]>): Promise<T[]> {
+  await recoverRecordMutation<T>(indexKey);
+  const indexed = await readListIndex<T>(indexKey);
+  if (indexed && await storage().getText(consistentIndexKey(indexKey))) return indexed;
+  // One-time reconciliation also repairs indexes left inconsistent by older builds.
+  const records = await readObjects();
+  await writeJson(indexKey, records);
+  await storage().putText(consistentIndexKey(indexKey), "2");
+  return records;
+}
+
+async function listRecords<T>(indexKey: string, readObjects: () => Promise<T[]>): Promise<T[]> {
+  const [indexed, pending, consistent] = await Promise.all([
+    readListIndex<T>(indexKey), storage().getText(pendingMutationKey(indexKey)), storage().getText(consistentIndexKey(indexKey))
+  ]);
+  if (indexed && !pending && consistent) return indexed;
+  return withIndexLock(indexKey, () => currentRecords(indexKey, readObjects), RECORD_LOCK_OPTIONS);
+}
+
+async function mutateRecords<T, R>(
+  indexKey: string,
+  readObjects: () => Promise<T[]>,
+  prepare: (records: T[]) => { mutation: RecordMutation<T>; result: R }
+): Promise<R> {
+  return withIndexLock(indexKey, async () => {
+    const records = await currentRecords(indexKey, readObjects);
+    const { mutation, result } = prepare(records);
+    await writeJson(pendingMutationKey(indexKey), mutation);
+    await recoverRecordMutation<T>(indexKey);
+    return result;
+  }, RECORD_LOCK_OPTIONS);
+}
+
+function recordError(message: string, status: number): never {
+  const error = new Error(message);
+  (error as Error & { status: number }).status = status;
+  throw error;
+}
+
 async function readJson<T>(key: string): Promise<T | null> {
   const text = await storage().getText(key);
   return text ? (JSON.parse(text) as T) : null;
@@ -102,16 +169,16 @@ async function withIndexLock<T>(indexKey: string, task: () => Promise<T>, option
     if (await storage().putTextIfAbsent(lockKey, JSON.stringify(lock))) {
       const heartbeatKey = `${lockKey}.heartbeat.${owner}`;
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-      if (heartbeatMs) {
-        const heartbeat = async () => storage().putText(heartbeatKey, String(Date.now()));
-        await heartbeat();
-        heartbeatTimer = setInterval(() => {
-          void heartbeat().catch((error) => {
-            console.error("[index-lock-heartbeat-error]", { lockKey, owner, error });
-          });
-        }, heartbeatMs);
-      }
       try {
+        if (heartbeatMs) {
+          const heartbeat = async () => storage().putText(heartbeatKey, String(Date.now()));
+          await heartbeat();
+          heartbeatTimer = setInterval(() => {
+            void heartbeat().catch((error) => {
+              console.error("[index-lock-heartbeat-error]", { lockKey, owner, error });
+            });
+          }, heartbeatMs);
+        }
         return await task();
       } finally {
         if (heartbeatTimer) clearInterval(heartbeatTimer);
@@ -193,7 +260,18 @@ export async function getRunnerProfile(username: string): Promise<RunnerProfile 
 }
 
 export async function saveRunnerProfile(username: string, profile: RunnerProfile): Promise<void> {
-  await writeJson(runnerProfileKey(username), profile);
+  await updateRunnerProfile(username, () => profile);
+}
+
+export async function updateRunnerProfile(
+  username: string,
+  update: (existing: RunnerProfile | null) => RunnerProfile
+): Promise<RunnerProfile> {
+  return withIndexLock(runnerProfileKey(username), async () => {
+    const profile = update(await getRunnerProfile(username));
+    await writeJson(runnerProfileKey(username), profile);
+    return profile;
+  }, RECORD_LOCK_OPTIONS);
 }
 
 export async function getDeepseekSecret(username: string): Promise<EncryptedSecret | null> {
@@ -256,116 +334,92 @@ export async function withAiPredictionLock<T>(username: string, targetHash: stri
 }
 
 export async function listRuns(username: string): Promise<RunningRecord[]> {
-  const indexed = await readListIndex<RunningRecord>(runsIndexKey(username));
-  if (indexed) return sortRuns(indexed);
-
-  return withIndexLock(runsIndexKey(username), async () => {
-    const current = await readListIndex<RunningRecord>(runsIndexKey(username));
-    if (current) return sortRuns(current);
-    const records = await readRunsFromObjects(username);
-    await writeJson(runsIndexKey(username), records);
-    return records;
-  });
+  return sortRuns(await listRecords(runsIndexKey(username), () => readRunsFromObjects(username)));
 }
 
 export async function getRun(username: string, runId: string): Promise<RunningRecord | null> {
-  return readJson<RunningRecord>(runKey(username, runId));
+  runKey(username, runId);
+  return (await listRuns(username)).find(run => run.id === runId) ?? null;
 }
 
 export async function saveRun(username: string, run: RunningRecord): Promise<void> {
-  await writeJson(runKey(username, run.id), run);
-  await withIndexLock(runsIndexKey(username), async () => {
-    const persisted = (await getRun(username, run.id)) ?? run;
-    const records = (await readListIndex<RunningRecord>(runsIndexKey(username))) ?? (await readRunsFromObjects(username));
-    await writeJson(runsIndexKey(username), sortRuns([persisted, ...records.filter((record) => record.id !== run.id)]));
-  });
+  const key = runKey(username, run.id);
+  await mutateRecords(runsIndexKey(username), () => readRunsFromObjects(username), records => ({
+    mutation: { records: sortRuns([run, ...records.filter(record => record.id !== run.id)]), puts: [{ key, value: run }], deletes: [] }, result: undefined
+  }));
 }
 
 export async function deleteRun(username: string, runId: string): Promise<void> {
-  await storage().delete(runKey(username, runId));
-  await withIndexLock(runsIndexKey(username), async () => {
-    const records = (await readListIndex<RunningRecord>(runsIndexKey(username))) ?? (await readRunsFromObjects(username));
-    await writeJson(runsIndexKey(username), sortRuns(records.filter((record) => record.id !== runId)));
-  });
+  const key = runKey(username, runId);
+  await mutateRecords(runsIndexKey(username), () => readRunsFromObjects(username), records => ({
+    mutation: { records: records.filter(record => record.id !== runId), puts: [], deletes: [key] }, result: undefined
+  }));
 }
 
 export async function listShoes(username: string): Promise<RunningShoe[]> {
-  const indexed = await readListIndex<RunningShoe>(shoesIndexKey(username));
-  if (indexed) return sortShoes(indexed);
-
-  return withIndexLock(shoesIndexKey(username), async () => {
-    const current = await readListIndex<RunningShoe>(shoesIndexKey(username));
-    if (current) return sortShoes(current);
-    const records = await readShoesFromObjects(username);
-    await writeJson(shoesIndexKey(username), records);
-    return records;
-  });
+  return sortShoes(await listRecords(shoesIndexKey(username), () => readShoesFromObjects(username)));
 }
 
 export async function getShoe(username: string, shoeId: string): Promise<RunningShoe | null> {
-  return readJson<RunningShoe>(shoeKey(username, shoeId));
+  shoeKey(username, shoeId);
+  return (await listShoes(username)).find(shoe => shoe.id === shoeId) ?? null;
 }
 
 export async function saveShoe(username: string, shoe: RunningShoe): Promise<void> {
-  await writeJson(shoeKey(username, shoe.id), shoe);
-  await withIndexLock(shoesIndexKey(username), async () => {
-    const persisted = (await getShoe(username, shoe.id)) ?? shoe;
-    const records = (await readListIndex<RunningShoe>(shoesIndexKey(username))) ?? (await readShoesFromObjects(username));
-    await writeJson(shoesIndexKey(username), sortShoes([persisted, ...records.filter((record) => record.id !== shoe.id)]));
-  });
+  const key = shoeKey(username, shoe.id);
+  await mutateRecords(shoesIndexKey(username), () => readShoesFromObjects(username), records => ({
+    mutation: { records: sortShoes([shoe, ...records.filter(record => record.id !== shoe.id)]), puts: [{ key, value: shoe }], deletes: [] }, result: undefined
+  }));
 }
 
 export async function deleteShoe(username: string, shoeId: string): Promise<void> {
-  await storage().delete(shoeKey(username, shoeId));
-  await withIndexLock(shoesIndexKey(username), async () => {
-    const records = (await readListIndex<RunningShoe>(shoesIndexKey(username))) ?? (await readShoesFromObjects(username));
-    await writeJson(shoesIndexKey(username), sortShoes(records.filter((record) => record.id !== shoeId)));
-  });
-
-  await withIndexLock(runsIndexKey(username), async () => {
-    const runs = (await readListIndex<RunningRecord>(runsIndexKey(username))) ?? (await readRunsFromObjects(username));
+  const key = shoeKey(username, shoeId);
+  // Finish unlinking first; an interrupted cascade must not remove the shoe while
+  // leaving the already indexed runs permanently attached to it.
+  await mutateRecords(runsIndexKey(username), () => readRunsFromObjects(username), runs => {
     const now = new Date().toISOString();
     const updatedRuns = runs.map((run) => (run.shoeId === shoeId ? { ...run, shoeId: null, updatedAt: now } : run));
     const changedRuns = updatedRuns.filter((run, index) => run !== runs[index]);
-    await Promise.all(changedRuns.map((run) => writeJson(runKey(username, run.id), run)));
-    if (changedRuns.length > 0) {
-      await writeJson(runsIndexKey(username), sortRuns(updatedRuns));
-    }
+    return { mutation: { records: sortRuns(updatedRuns), puts: changedRuns.map(run => ({ key: runKey(username, run.id), value: run })), deletes: [] }, result: undefined };
   });
+  await mutateRecords(shoesIndexKey(username), () => readShoesFromObjects(username), records => ({
+    mutation: { records: records.filter(record => record.id !== shoeId), puts: [], deletes: [key] }, result: undefined
+  }));
 }
 
 export async function listWeights(username: string): Promise<WeightRecord[]> {
-  const indexed = await readListIndex<WeightRecord>(weightsIndexKey(username));
-  if (indexed) return sortWeights(indexed);
-
-  return withIndexLock(weightsIndexKey(username), async () => {
-    const current = await readListIndex<WeightRecord>(weightsIndexKey(username));
-    if (current) return sortWeights(current);
-    const records = await readWeightsFromObjects(username);
-    await writeJson(weightsIndexKey(username), records);
-    return records;
-  });
+  return sortWeights(await listRecords(weightsIndexKey(username), () => readWeightsFromObjects(username)));
 }
 
 export async function getWeight(username: string, date: string): Promise<WeightRecord | null> {
-  return readJson<WeightRecord>(weightKey(username, date));
+  weightKey(username, date);
+  return (await listWeights(username)).find(weight => weight.date === date) ?? null;
 }
 
-export async function saveWeight(username: string, weight: WeightRecord): Promise<void> {
-  await writeJson(weightKey(username, weight.date), weight);
-  await withIndexLock(weightsIndexKey(username), async () => {
-    const persisted = (await getWeight(username, weight.date)) ?? weight;
-    const records = (await readListIndex<WeightRecord>(weightsIndexKey(username))) ?? (await readWeightsFromObjects(username));
-    await writeJson(weightsIndexKey(username), sortWeights([persisted, ...records.filter((record) => record.date !== weight.date)]));
+export async function saveWeight(username: string, weight: WeightRecord, previousDate?: string): Promise<WeightRecord> {
+  const key = weightKey(username, weight.date);
+  const previousKey = previousDate === undefined ? null : weightKey(username, previousDate);
+  return mutateRecords(weightsIndexKey(username), () => readWeightsFromObjects(username), records => {
+    const existing = records.find(record => record.date === weight.date);
+    const source = previousDate === undefined ? undefined : records.find(record => record.date === previousDate);
+    if (previousDate !== undefined && !source) recordError("原日期的体重记录不存在，请刷新后重试。", 404);
+    if (existing && previousDate !== weight.date) recordError("该日期已有体重记录，请选择其他日期或编辑已有记录。", 409);
+    const saved = { ...weight, createdAt: source?.createdAt ?? weight.createdAt };
+    return {
+      mutation: {
+        records: sortWeights([saved, ...records.filter(record => record.date !== weight.date && record.date !== previousDate)]),
+        puts: [{ key, value: saved }],
+        deletes: previousKey && previousDate !== weight.date ? [previousKey] : []
+      }, result: saved
+    };
   });
 }
 
 export async function deleteWeight(username: string, date: string): Promise<void> {
-  await storage().delete(weightKey(username, date));
-  await withIndexLock(weightsIndexKey(username), async () => {
-    const records = (await readListIndex<WeightRecord>(weightsIndexKey(username))) ?? (await readWeightsFromObjects(username));
-    await writeJson(weightsIndexKey(username), sortWeights(records.filter((record) => record.date !== date)));
-  });
+  const key = weightKey(username, date);
+  await mutateRecords(weightsIndexKey(username), () => readWeightsFromObjects(username), records => ({
+    mutation: { records: records.filter(record => record.date !== date), puts: [], deletes: [key] }, result: undefined
+  }));
 }
 
 function delay(ms: number): Promise<void> {

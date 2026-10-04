@@ -14,7 +14,7 @@ export default async function shoeById(req: Request, context: { params?: { id?: 
     if (req.method === "PUT") {
       const body = await parseJson(req);
       const payload = typeof body === "object" && body !== null ? body : {};
-      const shoe = validateShoePayload({ ...payload, id: shoeId });
+      const shoe = validateShoePayload({ ...payload, id: shoeId }, undefined, username);
       await saveShoe(username, shoe);
       return json({ shoe });
     }
